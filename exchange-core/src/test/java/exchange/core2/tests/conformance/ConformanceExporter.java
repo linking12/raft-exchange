@@ -16,7 +16,9 @@ import exchange.core2.core.common.api.ApiAdjustMargin;
 import exchange.core2.core.common.api.ApiAdjustMarkPrice;
 import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
+import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiInsuranceFundDeposit;
+import exchange.core2.core.common.api.ApiMoveOrder;
 import exchange.core2.core.common.api.ApiLoanCreate;
 import exchange.core2.core.common.api.ApiLoanCrossAddCollateral;
 import exchange.core2.core.common.api.ApiLoanCrossBorrow;
@@ -26,6 +28,7 @@ import exchange.core2.core.common.api.ApiLoanIfDeposit;
 import exchange.core2.core.common.api.ApiLoanRepay;
 import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiPoolDeposit;
+import exchange.core2.core.common.api.ApiReduceOrder;
 import exchange.core2.core.common.api.binary.BatchAddLoanCommand;
 import exchange.core2.core.common.api.ApiSettleFundingFees;
 import exchange.core2.core.common.api.ApiSettlePNL;
@@ -122,13 +125,15 @@ public class ConformanceExporter {
 
         IEventsHandler4Test handler = new IEventsHandler4Test() {
             @Override public void process(FundEventReport r) { fundEventReport(r); }
+            // ER/ERF 剔除 seq 派生的 tradeId/execId:Java(R2 -seq + 主 +seq 双发) 与 Rust(results_seq 单发)
+            // 的 seq 口径刻意不同(§6 exec-ids 不跨引擎比);taker==maker 共享 id 的不变式由防线① + 单元测试覆盖。
             @Override public void process(SpotExecutionReport r) {
                 if (!matchOn) return;
                 matchAccum.add("ER " + r.executionType.name() + ' ' + r.orderStatus.name()
                         + " uid=" + r.accountId + " oid=" + r.orderId + " side=" + r.side.name()
                         + " maker=" + (r.isMaker ? 1 : 0) + " px=" + r.price + " lastQty=" + r.lastQty
                         + " lastPx=" + r.lastPrice + " cumQty=" + r.cumulativeQty + " cumQ=" + r.cumulativeQuoteQty
-                        + " comm=" + r.commission + " tid=" + r.tradeId);
+                        + " comm=" + r.commission);
             }
             @Override public void process(FuturesExecutionReport r) {
                 if (!matchOn) return;
@@ -137,7 +142,7 @@ public class ConformanceExporter {
                         + " maker=" + (r.isMaker ? 1 : 0) + " pos=" + r.positionSide.name() + " cp=" + r.counterpartyId
                         + " px=" + r.price + " lastQty=" + r.lastQty + " lastPx=" + r.lastPx
                         + " cumQty=" + r.cumQty + " cumQ=" + r.cumQuoteQty + " avgPx=" + r.avgPx
-                        + " fee=" + r.fee + " eid=" + r.execId);
+                        + " fee=" + r.fee);
             }
             @Override public void orderBook(ITradeEventsHandler.OrderBook o) {}
             @Override public void spotExecutionReport(ITradeEventsHandler.SpotExecutionReport r) {}
@@ -238,6 +243,18 @@ public class ConformanceExporter {
                                 .leverage((int) pl(kv, "leverage", 1))
                                 .reduceOnly(pl(kv, "reduceOnly", 0) != 0)
                                 .marginMode("CROSS".equals(kv.get("margin")) ? MarginMode.CROSS : MarginMode.ISOLATED).build()).join();
+                        break;
+                    case "CANCEL":
+                        rc = api.submitCommandAsync(ApiCancelOrder.builder()
+                                .uid(pl(kv, "uid")).orderId(pl(kv, "oid")).symbol(pi(kv, "sym")).build()).join();
+                        break;
+                    case "REDUCE":
+                        rc = api.submitCommandAsync(ApiReduceOrder.builder()
+                                .uid(pl(kv, "uid")).orderId(pl(kv, "oid")).symbol(pi(kv, "sym")).reduceSize(pl(kv, "size")).build()).join();
+                        break;
+                    case "MOVE":
+                        rc = api.submitCommandAsync(ApiMoveOrder.builder()
+                                .uid(pl(kv, "uid")).orderId(pl(kv, "oid")).symbol(pi(kv, "sym")).newPrice(pl(kv, "price")).build()).join();
                         break;
                     case "SCAN":
                         // 强平/ADL 走异步引擎、FORCE→IF→ADL 级联需多轮 scan(对齐 Java testADL 的

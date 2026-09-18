@@ -12,7 +12,10 @@ use exchange_core_rs::core::common::order_action::OrderAction;
 use exchange_core_rs::core::common::order_type::OrderType;
 use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use exchange_core_rs::core::common::symbol_type::SymbolType;
-use exchange_core_rs::core::exchange_api::{ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest, PlaceOrderRequest};
+use exchange_core_rs::core::exchange_api::{
+    CancelOrderRequest, ExchangeApi, MarginAdjustmentRequest, MoveOrderRequest, PlaceFuturesOrderRequest, PlaceOrderRequest,
+    ReduceOrderRequest,
+};
 use exchange_core_rs::core::common::position_mode::PositionMode;
 use exchange_core_rs::core::fund_events_handler::{FundEventReport, FundEventsHandler};
 use exchange_core_rs::core::simple_events_processor::SimpleEventsProcessor;
@@ -25,11 +28,11 @@ impl TradeEventsHandler for ErRecorder {
     fn order_book(&mut self, _ob: OrderBook) {}
     fn spot_execution_report(&mut self, r: SpotExecutionReport) {
         self.sink.borrow_mut().push(format!(
-            "ER {} {} uid={} oid={} side={} maker={} px={} lastQty={} lastPx={} cumQty={} cumQ={} comm={} tid={}",
+            "ER {} {} uid={} oid={} side={} maker={} px={} lastQty={} lastPx={} cumQty={} cumQ={} comm={}",
             snake(&format!("{:?}", r.execution_type)),
             snake(&format!("{:?}", r.order_status)),
             r.account_id, r.order_id, snake(&format!("{:?}", r.side)), if r.is_maker { 1 } else { 0 },
-            r.price, r.last_qty, r.mark_price, r.cumulative_qty, r.cumulative_quote_qty, r.commission, r.trade_id
+            r.price, r.last_qty, r.mark_price, r.cumulative_qty, r.cumulative_quote_qty, r.commission
         ));
     }
     fn futures_execution_report(&mut self, r: FuturesExecutionReport) {
@@ -38,11 +41,11 @@ impl TradeEventsHandler for ErRecorder {
             PositionMode::Hedge => "HEDGE",
         };
         self.sink.borrow_mut().push(format!(
-            "ERF {} {} uid={} oid={} side={} maker={} pos={} cp={} px={} lastQty={} lastPx={} cumQty={} cumQ={} avgPx={} fee={} eid={}",
+            "ERF {} {} uid={} oid={} side={} maker={} pos={} cp={} px={} lastQty={} lastPx={} cumQty={} cumQ={} avgPx={} fee={}",
             snake(&format!("{:?}", r.execution_type)),
             snake(&format!("{:?}", r.order_status)),
             r.user_id, r.order_id, snake(&format!("{:?}", r.side)), if r.is_maker { 1 } else { 0 },
-            pos, r.counterparty_id, r.price, r.last_qty, r.last_px, r.cum_qty, r.cum_quote_qty, r.avg_px, r.fee, r.exec_id
+            pos, r.counterparty_id, r.price, r.last_qty, r.last_px, r.cum_qty, r.cum_quote_qty, r.avg_px, r.fee
         ));
     }
 }
@@ -254,6 +257,23 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>, Vec<String>) 
                 leverage: opt_i64(&kv, "leverage", 1) as i32,
                 margin_mode: margin_of(kv.get("margin").map(String::as_str)),
                 reduce_only: opt_i64(&kv, "reduceOnly", 0) != 0,
+            })),
+            "CANCEL" => Some(api.cancel_order(CancelOrderRequest {
+                order_id: i64_of(&kv, "oid"),
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "sym"),
+            })),
+            "REDUCE" => Some(api.reduce_order(ReduceOrderRequest {
+                order_id: i64_of(&kv, "oid"),
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "sym"),
+                reduce_size: i64_of(&kv, "size"),
+            })),
+            "MOVE" => Some(api.move_order(MoveOrderRequest {
+                order_id: i64_of(&kv, "oid"),
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "sym"),
+                new_price: i64_of(&kv, "price"),
             })),
             "SCAN" => Some(api.submit(OrderCommand {
                 command: OrderCommandType::LiquidationScan,
