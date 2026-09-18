@@ -1,27 +1,7 @@
-//! 对应 Java `LiquidationScheduledService`（抽象父类，`exchange.core2.core.processors
-//! .liquidation.LiquidationScheduledService`）中「每 tick 发什么命令」的确定性部分。
-//!
-//! Java 版把「定时线程骨架（`ScheduledExecutorService`/start-stop/leader gate 布尔量）」
-//! 与「每 tick 该发什么命令」耦合在同一个抽象类里；本文件只翻译了后者——即
-//! `runOneIteration()`/`coveredByScanSlice()` 中纯粹、确定性的部分（该发哪个
-//! slice 的 `LIQUIDATION_SCAN`、要不要顺带发 `REPRICE_LOAN_RATES`）。发令出口与
-//! `LiquidationEngine` 同构 = Java `commandSubmitter` 回调（`run_one_iteration` 调 `submit(cmd)` →
-//! 回调）：单节点注册成塞 `ExchangeCore.pending_commands`、集群注册成 raft 提交、单测注册成 collector。
-//! 墙钟/定时线程由外层驱动，本模块不含。
-//!
-//! 关键点（与 Java 注释一致）：这里只负责“发命令”，不读用户态；真正的扫描/强平
-//! 检测发生在各节点 on-lane apply `LIQUIDATION_SCAN` 命令时（见
-//! `liquidation_engine`），命令经 raft 复制后各节点确定性 apply，从根上消除调度
-//! 线程与 apply 线程之间的竞态。
-
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
 use crate::core::processors::liquidation::command_submitter::CommandSubmitter;
 
-/// 对应 Java `LiquidationScheduledService.coveredByScanSlice`：判断某个 uid 是否落在
-/// 这条 `LIQUIDATION_SCAN` 命令负责扫描的分片里。非扫描命令、或 `size<=0`（未分片/
-/// 全量扫描）时视为总是覆盖；否则用 `floorMod`（对应 Rust 的 `rem_euclid`，对负数
-/// uid 也能得到非负余数）按分片数取模比较，实现扫描在多 tick 上的轮转分摊。
 pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     if cmd.command != OrderCommandType::LiquidationScan || cmd.size <= 0 {
         return true;
@@ -29,9 +9,6 @@ pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     uid.rem_euclid(cmd.size) == cmd.uid
 }
 
-/// leader-local 的强平发令节奏状态；对应 Java `LiquidationScheduledService` 里除线程
-/// 骨架之外的字段（`scanTick`/`scanSliceCount`/`repriceEveryNTicks`/`shardId`/
-/// `running`）。`is_running` 复用作 leader gate：由外层根据 leader 身份切换。
 #[derive(Debug, Default)]
 pub struct LiquidationScheduler {
     pub scan_tick: i64,
@@ -39,8 +16,7 @@ pub struct LiquidationScheduler {
     pub reprice_every_n_ticks: i64,
     pub shard_id: i32,
     pub is_running: bool,
-    /// 发令出口回调（= Java `commandSubmitter`）。与 `LiquidationEngine` 同构：单节点塞
-    /// `ExchangeCore.pending_commands`、集群提交 raft、单测 collector。
+
     command_submitter: CommandSubmitter,
 }
 
@@ -56,14 +32,10 @@ impl LiquidationScheduler {
         }
     }
 
-    /// 注册发令出口回调（= Java `LiquidationScheduledService.setCommandSubmitter`）。
     pub fn set_command_submitter(&mut self, cb: Box<dyn FnMut(OrderCommand)>) {
         self.command_submitter.set(cb);
     }
 
-    /// 对应 Java `runOneIteration()`：每个调度 tick 调用一次，经 `command_submitter` 回调发令。
-    /// 只有 leader 门控开启（`is_running`）且是 0 号 shard 才发命令——强平扫描/重定价只需全局发一份，不按
-    /// shard 重复；分片（slice）本身是扫描负载在多个 tick 上的轮转分摊，与 shard 是两个正交概念。
     pub fn run_one_iteration(&mut self, timestamp: i64) {
         if !self.is_running || self.shard_id != 0 {
             return;
@@ -98,8 +70,6 @@ mod tests {
         OrderCommand { command: OrderCommandType::LiquidationScan, symbol: -1, uid, size, ..Default::default() }
     }
 
-    /// collector 出口：把 `run_one_iteration` 发出的命令收进共享 Vec 供断言。等价于集群模式的回调，
-    /// 只是回调收集而非提交 raft。
     fn attach_collector(s: &mut LiquidationScheduler) -> Rc<RefCell<Vec<OrderCommand>>> {
         let collected = Rc::new(RefCell::new(Vec::new()));
         let sink = collected.clone();

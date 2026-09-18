@@ -1,12 +1,3 @@
-//! 对应 Java 测试类 `ITPlaceMarginOrderNsfChecks.java` 的移植：验证期货下单 NSF（资金不足）
-//! 校验中 `openLoss` 预留（BID 超付/ASK 贱卖/ONEWAY 反向大单 openingSize 截断）、order margin
-//! 反向 pending 单不占额外保证金、以及 ISOLATED 仓位浮盈不应被其它 symbol 的 CROSS 新单当资本
-//! 使用（cross-subsidy 隔离）等场景。注：Java 侧另有 `hedge_oppositeLegSubtractsSiblingIM`
-//! （HEDGE crossFreeMargin 对侧腿扣减）测试，本文件未移植对应场景。
-//!
-//! Symbol 规格沿用 `futures_spec`：initMargin=1/initMarginScaleK=100（初始保证金率 1%/leverage）；
-//! takerFee=20 fixed；maintenance bracket=(1000, 5)（维持保证金率 0.5%）；
-//! maxLeverage bracket=(2000, 5)/(100000, 10)。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -121,9 +112,6 @@ mod tests {
         }
     }
 
-    // 对应 Java openLoss_bidAboveMark_rejectedByNSF() 场景（Doc §1 Open Loss）：
-    // mark=1000, BID @ 2000 size=5 时 notional=10000, IM=20, openLoss=5×(2000-1000)=5000，
-    // 总需 IM+openLoss+fee=5120；deposit=300 不足 → 应被 RISK_NSF 拦下（"开仓即爆仓"陷阱）。
     #[test]
     fn open_loss_bid_above_mark_rejected_by_nsf() {
         let mut api = setup_single(MARK_PRICE);
@@ -142,8 +130,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java openLoss_bidAboveMark_acceptedWithSufficientBalance() 场景：同上但 deposit=6000
-    // (> 5120 需求)，应成功放行并开出 LONG 仓位。
     #[test]
     fn open_loss_bid_above_mark_accepted_with_sufficient_balance() {
         let mut api = setup_single(MARK_PRICE);
@@ -165,9 +151,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java openLoss_askBelowMark_rejectedByNSF() 场景：openLoss 的对称情形——ASK 报价低于
-    // mark（贱卖）同样要预留立即浮亏；mark=1000, ASK 5@500 需 IM(5)+fee(100)+openLoss(2500)=2605，
-    // deposit=1000 不足 → RISK_NSF。
     #[test]
     fn open_loss_ask_below_mark_rejected_by_nsf() {
         let mut api = setup_single(MARK_PRICE);
@@ -186,9 +169,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java openLoss_onewayReverseOrder_truncatedToOpeningPortion() 场景：ONEWAY 反向大单的
-    // openingSize 截断——LONG 5@1000 后挂 ASK 10@500 时，openLoss 只应对超出现有 openVolume 的
-    // 部分（10-5=5）预留，而非按全部 size=10 计算，否则会误判 NSF。
     #[test]
     fn open_loss_oneway_reverse_order_truncated_to_opening_portion() {
         let mut api = setup_single(MARK_PRICE);
@@ -212,9 +192,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java orderMargin_reduceSideOffset_pureReduceNoExtraMargin() 场景（Doc §7 Order Margin）：
-    // LONG 5@1000 后挂纯反向 ASK 5@1000（pure reduce）不应占用额外保证金——required margin 只剩
-    // openInitMarginSum + fee，不叠加 pending IM。
     #[test]
     fn order_margin_reduce_side_offset_pure_reduce_no_extra_margin() {
         let mut api = setup_single(MARK_PRICE);
@@ -241,9 +218,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java orderMargin_sameSideOpen_reservesPendingIM() 场景（Doc §7）：非 reduce 的同向加仓
-    // pending 单应正常锁定 orderMargin——LONG 5@1000 再挂同向 BID 3@1000 时，pending_buy_size 应
-    // 反映挂单量，持仓量（open_volume）在成交前保持不变。
     #[test]
     fn order_margin_same_side_open_reserves_pending_im() {
         let mut api = setup_single(MARK_PRICE);
@@ -272,7 +246,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 构造两个独立永续合约 symbol 且都已初始化 mark price，供跨 symbol 的 cross-subsidy 测试复用。
     fn setup_two(symbol_a: i32, symbol_b: i32, mark: i64) -> ExchangeApi {
         let mut api = ExchangeApi::new();
         api.add_currency(BASE, 1);
@@ -284,9 +257,6 @@ mod tests {
         api
     }
 
-    // 对应 Java isolatedCrossSubsidy_isolatedPnlBlockedFromCrossCapacity() 场景：ISOLATED
-    // 仓位的浮盈不能被其它 symbol 的 CROSS 新单当资本使用——symbol A 用 ISOLATED 开仓并拉高
-    // mark price 产生浮盈后，symbol B 的 CROSS 新单仍应因 A 的浮盈不计入 crossFreeMargin 而 NSF。
     #[test]
     fn isolated_cross_subsidy_isolated_pnl_blocked_from_cross_capacity() {
         let symbol_a = 7001;
@@ -323,8 +293,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java isolatedCrossSubsidy_crossPnlAllowedIntoCrossCapacity() 场景：与上一测试对照——
-    // symbol A 改用 CROSS 开仓时，其浮盈应该能被 symbol B 的 CROSS 新单当作资本使用，两笔都应成功。
     #[test]
     fn isolated_cross_subsidy_cross_pnl_allowed_into_cross_capacity() {
         let symbol_a = 7101;

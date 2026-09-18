@@ -1,7 +1,5 @@
 use crate::core::common::loan_record::LoanRecord;
 
-/// 对应 Java `IsolatedLoanRecord.RATE_MODE_LOCKED` / `RATE_MODE_FLOATING`。
-/// Locked = 定息,开仓锁 rate_bps 线性计息;Floating = 活期,走 acc_snapshot 累加器。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoanRateMode {
     Locked,
@@ -31,40 +29,35 @@ impl Default for LoanRateMode {
     }
 }
 
-/// 对应 Java `exchange.core2.core.common.IsolatedLoanRecord`。Isolated 单笔贷款凭证,挂在 `UserProfile.isolated_loans`;
-/// 抵押与本笔 loan 一对一绑定。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IsolatedLoanRecord {
-    /// 所属用户;不序列化(见 `chronicle_write`),仅进 `state_hash`。
+
     pub uid: i64,
-    /// 客户端提供,per-user 唯一,创建时锁死。
+
     pub loan_id: i64,
 
-    /// 现货 pair(= cmd.symbol),scanner/handler 据此取 spec。
     pub symbol_id: i32,
-    /// = spec.base_currency。
+
     pub collateral_currency: i32,
-    /// = spec.quote_currency。
+
     pub loan_currency: i32,
-    /// 开仓时锁定,存续期不变。
+
     pub rate_mode: LoanRateMode,
-    /// 年化利率(bps)。Locked 计息用;Floating 仅作开仓利率展示,计息走累加器。
+
     pub rate_bps: i32,
-    /// 开仓时间戳(ms),期限强平用(仅 Locked 有期限)。
+
     pub opened_at_ts: i64,
 
-    /// 已抵押数量(currencyScale);force-sell 前经换算成张数,不足一张的尘埃在 LIF 接管时一并取走。
     pub collateral_amount: i64,
-    /// 剩余未偿本金(loan_currency)。
+
     pub outstanding_principal: i64,
-    /// 已计提未付利息(loan_currency),结算时进 interestRevenue。
+
     pub accumulated_interest: i64,
-    /// 上次计息时间戳(ms),初始 = opened_at_ts;Locked 计息游标。
+
     pub last_accrue_ts: i64,
-    /// Floating 计息游标:上次 accrue 的 liveAcc 快照(bps·ms);Locked 不用。
+
     pub acc_snapshot: i64,
 
-    /// 累计已付利息(loan_currency);FundEvent 只发快照,本次量由下游相邻两条相减得出。
     pub cum_interest_paid: i64,
 }
 
@@ -84,8 +77,6 @@ impl IsolatedLoanRecord {
         r
     }
 
-    /// 对应 Java `IsolatedLoanRecord.initialize`:从对象池拿到 record 后必须先调用以重置 identity + 可变状态,
-    /// 跟 `SymbolPositionRecord::initialize` 同款契约。
     #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         &mut self,
@@ -113,12 +104,10 @@ impl IsolatedLoanRecord {
         self.cum_interest_paid = 0;
     }
 
-    /// 对应 Java `IsolatedLoanRecord.isEmpty`。
     pub fn is_empty(&self) -> bool {
         self.collateral_amount == 0 && self.outstanding_principal == 0 && self.accumulated_interest == 0
     }
 
-    /// 对应 Java `IsolatedLoanRecord.stateHash`(`Objects.hash` 语义,用于跨节点一致性校验)。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         h = h.wrapping_mul(31).wrapping_add(self.uid);
@@ -139,7 +128,6 @@ impl IsolatedLoanRecord {
     }
 }
 
-/// 对应 Java `IsolatedLoanRecord` 实现的 `LoanRecord` 接口方法(getter/setter 对)。
 impl LoanRecord for IsolatedLoanRecord {
     fn loan_currency(&self) -> i32 {
         self.loan_currency
@@ -198,8 +186,6 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
-/// 对应 Java `IsolatedLoanRecord.writeMarshallable` / `IsolatedLoanRecord(BytesIn)`;`uid` 不序列化,
-/// 由外层按 `UserProfile.isolated_loans` 的 key 上下文注入(读回后置 0,由调用方回填)。
 impl ChronicleMarshallable for IsolatedLoanRecord {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i64(self.loan_id);

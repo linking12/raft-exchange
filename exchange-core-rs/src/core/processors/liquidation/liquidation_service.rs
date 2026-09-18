@@ -1,30 +1,3 @@
-//! 对应 Java `LiquidationService`（`exchange.core2.core.processors.liquidation
-//! .LiquidationService`）。强平流程的核心 service，每个分片一个实例，承担三类职责：
-//!
-//! - **IF 保险基金池状态**：`notionals`（available/reserved）+ IF 接管的 `positions`；
-//!   经 [`crate::core::snapshot::marshalling::ChronicleMarshallable`] 序列化进 raft
-//!   snapshot，跨节点强一致，并计入 `state_hash`。
-//! - **强平命令 orderId 编码**：FORCE 是根，IF/ADL 从它派生（`generate_if_order_id`/
-//!   `generate_adl_order_id`），位布局见 [`LiquidationService::generate_liquidation_order_id`]
-//!   前的说明。
-//! - **ADL 候选构造**：[`LiquidationService::compute_profitable_positions_by_symbol`]
-//!   在 apply 时按需从复制态（传入的 `UserProfileService`/`SymbolSpecificationProvider`/
-//!   last-price cache）现算，保证跨节点确定；评分见 `risk_score`/`unrealized_pnl`。
-//!
-//! `notionals`/`positions` 是序列化状态（进 snapshot）；Java 版另持有
-//! `userProfileService`/`symbolSpecificationProvider`/`currencySpecificationProvider`/
-//! `lastPriceCache` 等由 `updateProvider` 注入的依赖字段（不进 snapshot）。Rust 版把这些
-//! 依赖改为按调用传参（见 `compute_profitable_positions_by_symbol` 的函数签名），未在
-//! `LiquidationService` 结构体上保留对应字段。
-//!
-//! 用 [`BTreeMap`] 而非哈希表存放 `notionals`/`positions`：迭代顺序按 key 有序、
-//! 跨节点确定，这是 `state_hash`/Chronicle 序列化字节级一致的前提（Java 侧用
-//! `IntObjectHashMap` + `HashingUtils.stateHash`/`SerializationUtils.marshallIntHashMap`
-//! 达到同样的跨节点一致目的）。
-//!
-//! Java 版另有 `isLiquidationOrderId` 静态方法（按 orderId 反解 symbol/uid 校验），本文件
-//! 未见对应实现。
-
 use std::collections::BTreeMap;
 
 use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -36,9 +9,6 @@ use crate::core::processors::symbol_specification_provider::SymbolSpecificationP
 use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils::{mul_exact, size_price_to_currency_scale};
 
-/// 对应 Java 内部类 `IFNotional`。IF（保险基金）单 symbol 名义资金：`available` 可动用，
-/// `reserved` 是强平流程 R1 阶段的预冻结部分（R2 要么转为 `accept_if_position` 扣款，
-/// 要么被 `release_reserved_if_notional` 释放）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct IfNotional {
     pub available: i64,
@@ -52,10 +22,6 @@ impl IfNotional {
     }
 }
 
-/// 对应 Java 内部类 `IFPositionRecord`。IF 接管仓位：某 symbol+方向累计接管的持仓量
-/// 与开仓成本（反向出清估值用）。key 编码见 `LiquidationService::positions`
-/// 上的说明（`direction.multiplier() * symbol`，正负号区分多空，避免同 symbol
-/// 多空两条记录互相覆盖）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IfPositionRecord {
     pub symbol: i32,
@@ -65,8 +31,7 @@ pub struct IfPositionRecord {
 }
 
 impl IfPositionRecord {
-    /// 按当前 mark price 估算该 IF 持仓的名义市值（开仓成本 + 浮动盈亏），供报表侧
-    /// 展示 IF 自身持仓的 mark-to-market 价值；本包 Java 版无直接对应方法。
+
     pub fn position_value(&self, mark: i64) -> i64 {
         let unrealized: i128 = self.direction.multiplier() as i128
             * (self.open_volume as i128 * mark as i128 - self.open_price_sum as i128);
@@ -82,10 +47,6 @@ impl IfPositionRecord {
     }
 }
 
-/// 对应 Java `LiquidationService` 的序列化状态部分（`notionals`/`positions` 字段）。
-/// `notionals`：symbol -> IF 名义资金（available/reserved）。`positions`：
-/// key = `direction.multiplier() * symbol`（+symbol 多头仓，-symbol 空头仓），
-/// value 为该 symbol+方向下 IF 累计接管的仓位。
 #[derive(Debug, Clone, Default)]
 pub struct LiquidationService {
     pub notionals: BTreeMap<i32, IfNotional>,
@@ -97,30 +58,21 @@ impl LiquidationService {
         LiquidationService::default()
     }
 
-    /// 对应 Java `reset`：清空全部 IF 状态（测试/重建用）。
     pub fn reset(&mut self) {
         self.notionals.clear();
         self.positions.clear();
     }
 
-    /// 对应 Java `creditLiquidationFee`：强平手续费计入 IF 可用资金池。
     pub fn credit_liquidation_fee(&mut self, symbol: i32, notional_fee: i64) {
         let n = self.notionals.entry(symbol).or_default();
         n.available += notional_fee;
     }
 
-    /// 对应 Java `depositToInsuranceFund`：外部充值 IF 可用资金池（admin 触发）。
-    /// 入参已是 notional（size*price）尺度，scale 换算由调用方（risk engine）完成；
-    /// 对账闭环依赖调用方在同一条命令内对 adjustments 做反向记账。
     pub fn deposit_to_insurance_fund(&mut self, symbol: i32, notional_amount: i64) {
         let n = self.notionals.entry(symbol).or_default();
         n.available += notional_amount;
     }
 
-    /// 对应 Java `withdrawFromInsuranceFund`：IF_WITHDRAW 支持，从 available 扣款，
-    /// 含非负校验。只扣 available、不动 reserved——reserved 是正在保护某笔强平的
-    /// 预冻结部分，运营提现不能拿走。返回 false 表示 notional 不存在或 available
-    /// 不足以覆盖（不改状态）。
     pub fn withdraw_from_insurance_fund(&mut self, symbol: i32, notional_amount: i64) -> bool {
         let Some(n) = self.notionals.get_mut(&symbol) else {
             return false;
@@ -132,9 +84,6 @@ impl LiquidationService {
         true
     }
 
-    /// 对应 Java `reserveIFNotional`（R1）：预冻结 IF 可用名义金额，返回实际能冻结
-    /// 的量。`can_cover` 钳制在当前真实可用（`available - reserved`）之内，绝不
-    /// 超额承诺，保证 `available >= reserved` 恒成立。
     pub fn reserve_if_notional(&mut self, symbol: i32, request_size: i64, price: i64) -> i64 {
         let n = self.notionals.entry(symbol).or_default();
         let available = n.available - n.reserved;
@@ -144,17 +93,12 @@ impl LiquidationService {
         can_cover
     }
 
-    /// 对应 Java `releaseReservedIFNotional`（R2）：释放 R1 预冻结的名义金额。
     pub fn release_reserved_if_notional(&mut self, symbol: i32, reserved_notional: i64) {
         if let Some(n) = self.notionals.get_mut(&symbol) {
             n.reserved -= reserved_notional;
         }
     }
 
-    /// 对应 Java `acceptIFPosition`（R2）：IF 正式接管仓位——从 available 扣款，
-    /// 累加到该 symbol+方向的持仓量与成本。要求该 symbol 此前已 reserve 过
-    /// （否则 panic，见下方 `unwrap_or_else`），与 Java 版隐式假设 `notionals.get`
-    /// 非空一致。
     pub fn accept_if_position(&mut self, symbol: i32, direction: PositionDirection, size: i64, price: i64) {
         let spend = mul_exact(size, price);
         let n = self
@@ -174,16 +118,6 @@ impl LiquidationService {
         pos.open_price_sum += spend;
     }
 
-    /// 对应 Java `computeProfitablePositionsBySymbol`：ADL 候选构造，apply 时按需算出
-    /// 全部可被 ADL 摊派的仓位（symbol -> list）。
-    ///
-    /// 按需算而非用缓存的原因（与 Java javadoc 一致）：ADL apply 必须在所有节点算出
-    /// 相同候选，否则结果发散。若用 leader-only 维护的缓存，follower 侧为空，同一条
-    /// ADL 命令在 leader/follower 上会得到不同候选。这里改为每次从传入的复制态
-    /// （`ups`/`ssp`/`last_price_cache`，均来自调用方持有的、经 raft 复制的状态）
-    /// 现算，保证跨节点确定——Rust 版进一步把这些依赖做成显式参数而非注入到
-    /// `LiquidationService` 自身的字段，消除了「忘记 updateProvider」这一类可能导致
-    /// 跨节点不一致的隐藏状态。
     pub fn compute_profitable_positions_by_symbol(
         ups: &mut UserProfileService,
         ssp: &SymbolSpecificationProvider,
@@ -218,7 +152,7 @@ impl LiquidationService {
                 };
 
                 if position.margin_mode == MarginMode::Isolated {
-                    // ISOLATED：单仓位独立结算，没有用户级 gating——浮盈 > 0 直接入选
+
                     if position.estimate_unrealized_profit(mark_price) > 0 {
                         result.entry(position.symbol).or_default().push(position.clone());
                     }
@@ -227,7 +161,6 @@ impl LiquidationService {
                 }
             }
 
-            // CROSS：每个 currency 走一遍聚合 + 用户级 gating + factor + 入选
             for (currency, keys) in cross_by_currency {
                 Self::add_cross_positions_if_user_safe(profile, currency, &keys, ssp, last_price_cache, &mut result);
             }
@@ -236,19 +169,6 @@ impl LiquidationService {
         result
     }
 
-    /// 对应 Java `generateLiquidationOrderId`：强平命令 orderId 编码，FORCE 是根，
-    /// IF/ADL 从它派生（保留低 56 位以便审计回溯）。FORCE_LIQUIDATION 64 位布局
-    /// （与 Java javadoc 一致）：
-    ///
-    /// ```text
-    /// bit 63..32 : symbol    (高 32 位)
-    /// bit 31..12 : uid hash  (20 bit)
-    /// bit 11     : side bit  (LONG=0 / SHORT=1；HEDGE 下同 symbol 同 uid 同秒两侧防撞)
-    /// bit 10..0  : 秒级 ts   (11 bit ≈ 2048s ≈ 34min 内 (symbol,uid,side) 唯一)
-    /// ```
-    ///
-    /// 时间戳必须来自命令层确定性时间（leader 盖章、各节点同值），严禁本地墙钟——
-    /// 否则各节点算出的 orderId 会不一致。
     pub fn generate_liquidation_order_id(uid: i64, symbol: i32, direction: PositionDirection, timestamp: i64) -> i64 {
         let uid_hash = (uid.wrapping_mul(31).wrapping_add(17)) & 0xFFFFF;
         let side_bit: i64 = if direction == PositionDirection::Short { 1 } else { 0 };
@@ -256,26 +176,16 @@ impl LiquidationService {
         ((symbol as i64) << 32) | (uid_hash << 12) | (side_bit << 11) | ts_part
     }
 
-    /// 对应 Java `generateIFOrderId`：IF_TAKEOVER 的 orderId，与 `generate_adl_order_id`
-    /// 完全对称——高 8 位是标签（`'I'` = 0x49），低 56 位 ≡ 对应 FORCE 的低 56 位。
-    /// 注意：派生会丢弃 FORCE 高 8 位的 symbol；symbol < 2^24（≈16M）时无损，实际
-    /// 场景成立。
     pub fn generate_if_order_id(liquidation_order_id: i64) -> i64 {
         let if_order_tag: i64 = 0x49;
         (if_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
     }
 
-    /// 对应 Java `generateADLOrderId`：AUTO_DELEVERAGING 的 orderId，标签为 `'A'` = 0x41，
-    /// 其余布局与 `generate_if_order_id` 对称。
     pub fn generate_adl_order_id(liquidation_order_id: i64) -> i64 {
         let adl_order_tag: i64 = 0x41;
         (adl_order_tag << 56) | (liquidation_order_id & 0x00FF_FFFF_FFFF_FFFF)
     }
 
-    /// 对应 Java `stateHash`（`Objects.hash(HashingUtils.stateHash(notionals),
-    /// HashingUtils.stateHash(positions))`）：Rust 版改为对 `notionals`/`positions`
-    /// 按 `BTreeMap` 的 key 升序逐项做 31 进制多项式折叠，两者语义相同——都要求
-    /// 跨节点对同一状态算出同一个 hash，用于换届/快照后校验各节点状态一致。
     pub fn state_hash(&self) -> i32 {
         let mut h: i64 = 17;
         for (&symbol, n) in &self.notionals {
@@ -289,16 +199,12 @@ impl LiquidationService {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    /// 对应 Java `unrealizedPnl`：按破产价估算浮动盈亏（ADL 排序用，静态纯函数）。
-    /// 饱和乘法防止溢出翻转符号，见 `saturating_multiply`。
     pub fn unrealized_pnl(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
         let sign = pos.direction.multiplier() as i64;
         let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
         saturating_multiply(sign, notional - pos.open_price_sum)
     }
 
-    /// 对应 Java `riskScore`：ADL 排序键 = 浮盈 × 实际杠杆 × 资格因子，越大越优先
-    /// 被摊派。全程饱和乘法。
     pub fn risk_score(pos: &SymbolPositionRecord, bankruptcy_price: i64) -> i64 {
         let sign = pos.direction.multiplier() as i64;
         let notional = saturating_multiply(bankruptcy_price, pos.open_volume);
@@ -307,15 +213,6 @@ impl LiquidationService {
         saturating_multiply(saturating_multiply(actual_leverage, unrealized_pnl), pos.adl_eligibility)
     }
 
-    /// 对应 Java `addCrossPositionsIfUserSafe`：Cross 用户单 currency 的 ADL 候选
-    /// 构造——聚合 + 用户级 gating + factor + 入选一次性完成。
-    ///
-    /// Gating（账户必须足够安全且净盈利才有资格被 ADL 吃）：
-    /// - `total_profit > 0`（账户在本 currency 净盈利）
-    /// - `equity >= 1.2 × total_maintenance`（离强平线还有 20%+ 余量）
-    ///
-    /// factor 语义：账户离强平线越远 factor 越大，ADL 排序时越优先被吃；clamp 到
-    /// [0, 100]。
     fn add_cross_positions_if_user_safe(
         profile: &mut UserProfile,
         currency: i32,
@@ -379,9 +276,6 @@ impl LiquidationService {
     }
 }
 
-/// 对应 Java `saturatingMultiply`：饱和乘法，溢出时钳到 `i64::MAX`/`i64::MIN`
-/// （按结果符号）。WHY：ADL 排序键若用普通乘法，溢出截断会翻转符号导致排序反转，
-/// 饱和后仍保持单调（见下方 `risk_score` 相关测试）。
 fn saturating_multiply(a: i64, b: i64) -> i64 {
     match i64::try_from(a as i128 * b as i128) {
         Ok(v) => v,
@@ -400,34 +294,26 @@ use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
 impl ChronicleMarshallable for IfNotional {
-    /// 字段写入顺序：`available`、`reserved`。与 Java `IFNotional.writeMarshallable`
-    /// （`bytes.writeLong(available); bytes.writeLong(reserved);`）顺序一致。
+
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i64(self.available);
         w.write_i64(self.reserved);
     }
-    /// 镜像 `chronicle_write`，读取顺序与 Java `IFNotional(BytesIn)` 构造器一致：
-    /// `available`、`reserved`。
+
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         Ok(IfNotional { available: r.read_i64()?, reserved: r.read_i64()? })
     }
 }
 
 impl ChronicleMarshallable for IfPositionRecord {
-    /// 字段写入顺序：`symbol`、`direction`（编码为 1 字节）、`open_volume`、
-    /// `open_price_sum`。与 Java `IFPositionRecord.writeMarshallable`
-    /// （`writeInt(symbol); writeByte((byte)direction.getMultiplier()); writeLong(openVolume);
-    /// writeLong(openPriceSum);`）顺序一致；`direction.code()` 与 Java 的
-    /// `direction.getMultiplier()` 数值相同（见 `position_direction.rs` 的
-    /// `multiplier_and_code_match_java` 测试），因此字节内容也一致。
+
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i32(self.symbol);
         w.write_u8(self.direction.code() as u8);
         w.write_i64(self.open_volume);
         w.write_i64(self.open_price_sum);
     }
-    /// 镜像 `chronicle_write`，读取顺序与 Java `IFPositionRecord(BytesIn)` 构造器一致：
-    /// `symbol`、`direction`、`open_volume`、`open_price_sum`。
+
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         Ok(IfPositionRecord {
             symbol: r.read_i32()?,
@@ -439,10 +325,7 @@ impl ChronicleMarshallable for IfPositionRecord {
 }
 
 impl ChronicleMarshallable for LiquidationService {
-    /// 字段写入顺序：`notionals`（int-keyed map）、`positions`（int-keyed map，key
-    /// 从 `i64` 截断为 `i32` 写出）。与 Java `LiquidationService.writeMarshallable`
-    /// （`marshallIntHashMap(notionals, bytes); marshallIntHashMap(positions, bytes);`）
-    /// 顺序一致。
+
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_int_keyed_map(
             &self.notionals,
@@ -451,9 +334,7 @@ impl ChronicleMarshallable for LiquidationService {
         let positions_i32: BTreeMap<i32, &IfPositionRecord> = self.positions.iter().map(|(&k, v)| (k as i32, v)).collect();
         w.write_int_keyed_map(&positions_i32, |vw, v| v.chronicle_write(vw));
     }
-    /// 镜像 `chronicle_write`，读取顺序与 Java `LiquidationService(BytesIn)` 构造器
-    /// 一致：`notionals`、`positions`（positions 的 key 读回后从 `i32` 还原为
-    /// `i64`，与 `positions: BTreeMap<i64, IfPositionRecord>` 的存储类型对齐）。
+
     fn chronicle_read(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let notionals = crate::core::snapshot::marshalling::to_btree_i32(r.read_int_keyed_map(IfNotional::chronicle_read)?);
         let positions_i32 = r.read_int_keyed_map(IfPositionRecord::chronicle_read)?;

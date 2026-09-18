@@ -1,14 +1,3 @@
-//! 对应 Java `exchange.core2.core.orderbook.OrderBookDirectImpl`：基于「侵入式双向链表 + 价位桶（bucket）」
-//! 的订单簿实现，是 exchange-core 生产环境实际使用的实现（与仅用于测试/对拍基准的
-//! `OrderBookNaiveImpl` / Java `OrderBookNaiveImpl` 相对）。
-//!
-//! 设计与 Java 版一致：每个价位对应一个 [`Bucket`]，桶内订单按到达顺序（FIFO）串成一条链，
-//! 桶再按价格用有序表（Java 用 `LongAdaptiveRadixTreeMap`，这里用 [`BTreeMap`]）串起来；
-//! `next`/`prev` 沿着撮合方向遍历，无需重新排序即可定位最优价位（best ask / best bid）。
-//! 与 Java 用 GC 堆对象 + 对象池（`ObjectsPool`）不同，这里用 `Vec<Option<T>>` 充当 slab
-//! （见 [`OrderBookDirectImpl::alloc_order`]/[`OrderBookDirectImpl::free_order`]/
-//! [`OrderBookDirectImpl::alloc_bucket`]/[`OrderBookDirectImpl::free_bucket`]），
-//! `usize` 下标扮演 Java 里对象引用的角色，避免 Rust 下用链表/图结构必然遇到的借用检查问题。
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
@@ -26,10 +15,6 @@ use crate::core::common::symbol_type::SymbolType;
 use crate::core::orderbook::i_order_book::IOrderBook;
 use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact};
 
-/// 对应 Java `OrderBookDirectImpl.DirectOrder`：链表节点形态的挂单记录。字段与 Java 一一对应，
-/// 唯独 `parent`/`next`/`prev` 从对象引用换成了 slab 下标（`usize`）——
-/// `parent` 指向所属价位的 [`Bucket`]；`next`/`prev` 沿撮合方向串联同侧订单链
-/// （`next` 指向价格更优的一侧，`prev` 指向价格更差、越靠近队尾的一侧，与 Java 注释含义一致）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectOrder {
     pub order_id: i64,
@@ -49,10 +34,6 @@ pub struct DirectOrder {
     pub prev: Option<usize>,
 }
 
-/// 对应 Java `OrderBookDirectImpl.Bucket`：同一价位上所有挂单的聚合视图——
-/// `volume` 是该价位未成交总量、`num_orders` 是挂单笔数、`tail` 指向该价位链表中最先入队
-/// （FIFO 意义上最先被吃到）的那个订单（即 Java 里 `Bucket.tail`，桶内其余订单通过
-/// `DirectOrder.next`/`prev` 链接，价格与 `tail` 相同）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bucket {
     pub volume: i64,
@@ -60,12 +41,6 @@ pub struct Bucket {
     pub tail: usize,
 }
 
-/// 对应 Java `OrderBookDirectImpl`：单个 symbol 的订单簿。`orders`/`buckets` 是用
-/// `Vec<Option<T>>` 模拟的 slab（配合 `order_free`/`bucket_free` 空闲下标栈做对象复用，
-/// 对应 Java 的 `ObjectsPool`），`order_id_index` 对应 Java 的
-/// `LongAdaptiveRadixTreeMap<DirectOrder> orderIdIndex`（orderId -> 下标），
-/// `ask_price_buckets`/`bid_price_buckets` 对应 Java 的 `askPriceBuckets`/`bidPriceBuckets`
-/// （价格 -> 桶下标的有序索引），`best_ask`/`best_bid` 对应 Java 的 `bestAskOrder`/`bestBidOrder`。
 #[allow(dead_code)]
 pub struct OrderBookDirectImpl {
     orders: Vec<Option<DirectOrder>>,
@@ -81,10 +56,7 @@ pub struct OrderBookDirectImpl {
 }
 
 impl OrderBookDirectImpl {
-    // 从某一侧最优订单出发，沿 prev 链一路走到队尾，导出成扁平的 `Order` 列表（由值语义的
-    // `Order` 而非内部 `DirectOrder`/slab 下标构成）。用于生成快照写出的有序序列，
-    // 对应 Java `askOrdersStream`/`bidOrdersStream`（经 `OrdersSpliterator` 按 next 遍历）
-    // 在 `writeMarshallable` 里被 collect 成顺序写出的效果。
+
     fn chain_snapshot(&self, start: Option<usize>) -> Vec<Order> {
         let mut out = Vec::new();
         let mut cur = start;
@@ -109,9 +81,6 @@ impl OrderBookDirectImpl {
         out
     }
 
-    // 从快照读出的一条 `Order` 重建出一个 `DirectOrder` slab 条目并插入订单簿，
-    // 对应 Java 反序列化构造函数 `OrderBookDirectImpl(BytesIn bytes, ...)` 里的
-    // `DirectOrder order = new DirectOrder(bytes); insertOrder(order, null); orderIdIndex.put(...)`。
     fn rebuild_insert(&mut self, o: Order) {
         let order = DirectOrder {
             order_id: o.order_id,
@@ -135,22 +104,14 @@ impl OrderBookDirectImpl {
         self.insert_order(idx, None);
     }
 
-    /// Chronicle 快照写出用：取出当前 symbol spec 副本。对应 Java
-    /// `writeMarshallable` 中 `symbolSpec.writeMarshallable(bytes)` 之前先持有的 `symbolSpec` 字段。
     pub fn chronicle_symbol_spec(&self) -> Option<CoreSymbolSpecification> {
         self.symbol_spec.clone()
     }
 
-    /// Chronicle 快照写出用：分别导出 ask/bid 两条链的有序订单列表，
-    /// 对应 Java `writeMarshallable` 里 `askOrdersStream(true)` 与 `bidOrdersStream(true)`
-    /// 各自 forEach 写出的顺序（先全部 ask，再全部 bid）。
     pub fn chronicle_orders(&self) -> (Vec<Order>, Vec<Order>) {
         (self.chain_snapshot(self.best_ask), self.chain_snapshot(self.best_bid))
     }
 
-    /// Chronicle 快照读入用：从反序列化出的 ask/bid 订单列表重建整本订单簿，
-    /// 对应 Java 反序列化构造函数 `OrderBookDirectImpl(BytesIn bytes, ObjectsPool, ...)`
-    /// 里先读 `symbolSpec`、再按写出顺序逐个 `new DirectOrder(bytes)` 并 `insertOrder` 回填的过程。
     pub fn restore_chronicle(symbol_spec: CoreSymbolSpecification, asks: Vec<Order>, bids: Vec<Order>) -> Self {
         let mut b = Self::new();
         b.symbol_spec = Some(symbol_spec);
@@ -165,8 +126,7 @@ impl OrderBookDirectImpl {
 }
 
 impl OrderBookDirectImpl {
-    /// 对应 Java 构造函数 `OrderBookDirectImpl(CoreSymbolSpecification, ObjectsPool, ...)`：
-    /// 建一本空订单簿。没有对象池概念（Rust 侧用 slab + free 列表替代），故只初始化空容器。
+
     pub fn new() -> Self {
         Self {
             orders: Vec::new(),
@@ -182,20 +142,10 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 测试/上层构造辅助：带 symbol spec 建簿。生产路径下 symbol spec 通常由 Chronicle
-    /// 快照或外部装配提供，Java 侧对应带 `CoreSymbolSpecification` 参数的主构造函数。
     pub fn with_symbol_spec(symbol_spec: CoreSymbolSpecification) -> Self {
         Self { symbol_spec: Some(symbol_spec), ..Self::new() }
     }
 
-    /// 对应 Java `OrderBookDirectImpl.insertOrder`：把一个订单插入其价位所在的位置。
-    /// 两条路径与 Java 完全对应——
-    /// (1) 该价位已有桶：追加到桶尾（`toBucket.tail`）之前、成为新的 FIFO 队首，
-    ///     并把 `volume`/`numOrders` 累加到已有桶上（`freeBucket` 若非空则原样归还，因为用不上）；
-    /// (2) 该价位是新价位：新建/复用一个桶（`freeBucket`），再在价格有序索引中找“更差一档”的
-    ///     邻居桶（ask 找更低价、bid 找更高价，对应 Java `getLowerValue`/`getHigherValue`），
-    ///     把新订单接到邻居桶的队首之前；若没有更差邻居（说明这就是当前最优价），
-    ///     则直接更新 `best_ask`/`best_bid`。
     pub fn insert_order(&mut self, order_idx: usize, free_bucket: Option<usize>) {
         let (is_ask, price, remaining) = {
             let o = self.order(order_idx);
@@ -248,9 +198,6 @@ impl OrderBookDirectImpl {
                 self.bid_price_buckets.insert(price, bucket_idx);
             }
 
-            // ask 找价格更低的最近邻（对应 Java `askPriceBuckets.getLowerValue(price)`），
-            // bid 找价格更高的最近邻（对应 `bidPriceBuckets.getHigherValue(price)`）——
-            // 即撮合方向上排在“更差”一侧的相邻价位，新订单要接在它的队首之前。
             let neighbor_bucket = if is_ask {
                 self.ask_price_buckets.range(..price).next_back().map(|(_, &b)| b)
             } else {
@@ -288,10 +235,6 @@ impl OrderBookDirectImpl {
         }
     }
 
-    // 对应 Java `OrderBookDirectImpl.removeOrder`：把一个订单从其价位桶与同侧链表中摘除。
-    // 若被摘除的订单正是其桶的 tail 且桶内已无同价位的下一单，则该桶整体失效——
-    // 从价位索引中移除并把空桶下标返回给调用方（由调用方决定何时 free_bucket 回收），
-    // 与 Java `removeOrder` 返回 `Bucket bucketRemoved`（供上层 `objectsPool.put` 归还）语义一致。
     fn remove_order(&mut self, order_idx: usize) -> Option<usize> {
         let (size, filled, action, price, next, prev, parent) = {
             let o = self.order(order_idx);
@@ -337,9 +280,6 @@ impl OrderBookDirectImpl {
         bucket_removed
     }
 
-    // 对应 Java `OrderBookDirectImpl.newOrderPlaceGtc`：GTC 下单——先尝试即时撮合
-    // （taker 视角），若完全成交则直接返回；否则（存在重复 order_id 时拒单，
-    // 否则）把剩余未成交部分作为新挂单插入订单簿。
     fn new_order_place_gtc(&mut self, cmd: &mut OrderCommand) {
         let size = cmd.size;
         let action = cmd.action.expect("GTC order requires action");
@@ -381,14 +321,6 @@ impl OrderBookDirectImpl {
         self.insert_order(idx, None);
     }
 
-    /// 对应 Java `OrderBookDirectImpl.tryMatchInstantly`：核心撮合循环。
-    /// 从对侧最优订单（`best_ask`/`best_bid`）出发，沿 `prev` 链（价格从优到劣）依次吃单，
-    /// 直至 taker 剩余量耗尽、或遇到超出 `limit_price` 的价位、或对侧无单可吃为止。
-    /// `limit_price` 为 `None` 时不设限价（对应 Java `FOK_BUDGET` 非 BID 分支传入的
-    /// `limitPrice = 0L`——语义是"来者不拒直到吃穿"，这里改用 `Option` 更直接地表达无限价）。
-    /// 每吃满一个 maker 订单就从 slab/索引里注销它并推进到下一单（同价位桶被吃空时
-    /// 顺带从价位索引摘除该桶），逐笔生成 TRADE 事件并挂到 `cmd.matcher_event` 链上；
-    /// 返回值 `(taker_filled, taker_filled_notional)` 对应 Java 的 `long[]{takerFilled, takerFilledNotional}`。
     pub fn try_match_instantly(
         &mut self,
         taker_action: OrderAction,
@@ -419,9 +351,6 @@ impl OrderBookDirectImpl {
             return (0, 0);
         }
 
-        // 当前价位桶的 tail（即该价位最先入队的订单），对应 Java `DirectOrder priceBucketTail`。
-        // 用来判断"吃完这一单后，是否也吃穿了整个价位桶"——吃到 tail 说明该价位已空，
-        // 需要把这个价位从价位索引中摘除，并把 tail 切换到下一个价位桶的 tail。
         let mut price_bucket_tail: usize = {
             let parent = self.order(maker_idx0).parent.expect("maker must have parent bucket");
             self.bucket(parent).tail
@@ -429,13 +358,9 @@ impl OrderBookDirectImpl {
 
         let mut taker_filled: i64 = 0;
         let mut taker_filled_notional: i64 = 0;
-        // 事件按撮合发生顺序正向 push 进 Vec；Java 版是一边撮合一边正向串接单向链表
-        // （`triggerCmd.matcherEvent = tradeEvent` / `eventsTail.nextEvent = tradeEvent`）。
-        // 这里为了避开逐笔在 slab 上做指针操作的麻烦，先攒进 Vec，撮合循环结束后统一
-        // 倒序折叠成 `Option<Box<MatcherTradeEvent>>` 链表（见下方 for 循环），最终链表顺序与 Java 一致。
+
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
-        // 已完全成交、待归还 slab 的 maker 订单下标；对应 Java 的 `objectsPool.put(ObjectsPool.DIRECT_ORDER, makerOrder)`。
-        // 延迟到撮合循环结束后统一 free，避免在循环内借用冲突。
+
         let mut freed_orders: Vec<usize> = Vec::new();
 
         loop {
@@ -559,8 +484,6 @@ impl OrderBookDirectImpl {
             self.free_order(idx);
         }
 
-        // 倒序折叠 Vec -> 单向链表：从最后一笔开始，把已有链表接到 next 上再包一层 Box，
-        // 得到与 Java 正向 push_back 构造出的同一顺序的链表头。
         let mut chain: Option<Box<MatcherTradeEvent>> = None;
         for mut ev in events.into_iter().rev() {
             ev.next = chain.take();
@@ -571,8 +494,6 @@ impl OrderBookDirectImpl {
         (taker_filled, taker_filled_notional)
     }
 
-    // 对应 Java `OrderBookDirectImpl.newOrderMatchIoc`：IOC 下单——即时撮合，
-    // 未成交的剩余部分直接生成 REJECT 事件，绝不挂簿。
     fn new_order_match_ioc(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC order requires action");
         let price = cmd.price;
@@ -586,9 +507,6 @@ impl OrderBookDirectImpl {
         }
     }
 
-    // 对应 Java `OrderBookDirectImpl.newOrderMatchIocBudget`：用预算上限吃单（cmd.price
-    // 是 product-scale 总预算），仅 BID 语义明确（用预算买），ASK 方向 Java 直接拒单——
-    // "最低收入约束无法部分成交"，Rust 侧同样只对 BID 生效。
     fn new_order_match_ioc_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("IOC_BUDGET order requires action");
         if action != OrderAction::Bid {
@@ -607,12 +525,6 @@ impl OrderBookDirectImpl {
         }
     }
 
-    // 注意：Java `OrderBookDirectImpl.newOrder` 的 switch 里没有 FOK 分支——只支持
-    // GTC/IOC/FOK_BUDGET/IOC_BUDGET，普通 FOK 落在 default 分支被当作
-    // "Unsupported order type" 拒绝（源码留有 `// TODO FOK support` 注释）。
-    // 这里的 `new_order_match_fok` 是 Rust 侧补齐的普通 FOK（全部成交或整单拒绝，
-    // 不设预算）实现，没有直接对应的 Java 方法可比对；逻辑是先用
-    // `available_volume_for_match` 探测限价内可用流动性是否达到 size，够则真正撮合，不够则整单拒绝。
     fn new_order_match_fok(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("FOK order requires action");
         let price = cmd.price;
@@ -626,9 +538,6 @@ impl OrderBookDirectImpl {
         }
     }
 
-    // 对应 Java `OrderBookDirectImpl.newOrderMatchFokBudget`：先用
-    // `checkBudgetToFill`（对应 `check_budget_to_fill`）算出吃满 size 所需的预算，
-    // 再用 `isBudgetLimitSatisfied` 判断是否在预算限内，满足才真正撮合，否则整单拒绝。
     fn new_order_match_fok_budget(&mut self, cmd: &mut OrderCommand) {
         let action = cmd.action.expect("FOK_BUDGET order requires action");
         let size = cmd.size;
@@ -644,12 +553,6 @@ impl OrderBookDirectImpl {
         }
     }
 
-    /// 对应 Java `OrderBookDirectImpl.tryMatchInstantlyWithBudget`：结构上与
-    /// [`try_match_instantly`](Self::try_match_instantly) 同构的独立撮合实现，专供
-    /// IOC_BUDGET（仅 BID）使用，未合并进主撮合路径是为了不污染限价/IOC/FOK_BUDGET
-    /// 的主逻辑（与 Java 注释的理由一致：刻意复制一份而非共用）。
-    /// 每一档按 `remaining_budget / trade_price` 限制可购量（向下取整），预算耗尽即停；
-    /// `trade_price == 0` 时跳过该约束以避免除零（对应 Java 的相同判断）。
     fn match_against_budget_ioc(
         &mut self,
         taker_size: i64,
@@ -671,12 +574,6 @@ impl OrderBookDirectImpl {
         let mut events: Vec<MatcherTradeEvent> = Vec::new();
         let mut freed_orders: Vec<usize> = Vec::new();
 
-        // `batch_remaining`：当前价位档还能吃多少量的预算上限缓存。只在跨入新价位（或首次）
-        // 时按 `remaining_budget / price` 重新计算一次（下方 `if batch_remaining == 0` 分支），
-        // 同价位内的后续订单直接消耗这个缓存值，而不是像 Java `tryMatchInstantlyWithBudget`
-        // 那样对每个 maker 订单都重新做一次除法。由于同价位内 `remaining_budget` 的扣减
-        // 与 `price` 精确整除相关（`trade_size * price` 恰好从预算中减去），
-        // 逐单重算和批量缓存在数学上等价，这里只是省去重复的整数除法。
         let mut batch_remaining: i64 = 0;
         let mut price_bucket_tail: usize = 0;
 
@@ -787,9 +684,6 @@ impl OrderBookDirectImpl {
         self.symbol_spec.as_ref()
     }
 
-    // slab 分配：复用一个已释放下标（`order_free` 栈顶），否则在 `orders` 末尾新增。
-    // 对应 Java `objectsPool.get(ObjectsPool.DIRECT_ORDER, DirectOrder::new)`——
-    // 池中有空闲对象就复用，否则新建；这里用 Vec 下标取代对象引用。
     pub fn alloc_order(&mut self, order: DirectOrder) -> usize {
         if let Some(idx) = self.order_free.pop() {
             self.orders[idx] = Some(order);
@@ -800,8 +694,6 @@ impl OrderBookDirectImpl {
         }
     }
 
-    // 对应 Java `objectsPool.put(ObjectsPool.DIRECT_ORDER, order)`：把 slab 槽位置空
-    // 并压回空闲栈，供后续 `alloc_order` 复用。
     pub fn free_order(&mut self, idx: usize) {
         self.orders[idx] = None;
         self.order_free.push(idx);
@@ -815,7 +707,6 @@ impl OrderBookDirectImpl {
         self.orders[idx].as_mut().expect("dangling order slab index")
     }
 
-    // 桶版本的 slab 分配，对应 Java `objectsPool.get(ObjectsPool.DIRECT_BUCKET, Bucket::new)`。
     pub fn alloc_bucket(&mut self, bucket: Bucket) -> usize {
         if let Some(idx) = self.bucket_free.pop() {
             self.buckets[idx] = Some(bucket);
@@ -826,7 +717,6 @@ impl OrderBookDirectImpl {
         }
     }
 
-    // 对应 Java `objectsPool.put(ObjectsPool.DIRECT_BUCKET, bucket)`。
     pub fn free_bucket(&mut self, idx: usize) {
         self.buckets[idx] = None;
         self.bucket_free.push(idx);
@@ -840,11 +730,6 @@ impl OrderBookDirectImpl {
         self.buckets[idx].as_mut().expect("dangling bucket slab index")
     }
 
-    /// 对应 Java `OrderBookDirectImpl.validateInternalState`（经内部 `validateChain` 展开）：
-    /// 仅用于测试的完整性自检，遍历两侧链表校验价位单调性、桶聚合量、tail 指向等不变式
-    /// （具体断言见 [`validate_side`](Self::validate_side)），并核对 `order_id_index`
-    /// 与两条链上可达订单的并集完全一致（无孤儿、无遗漏），对应 Java 用
-    /// `Long2ObjectHashMap<DirectOrder> ordersInChain` 做的双向核对。
     pub fn validate_internal_state(&self) {
         self.validate_side(true);
         self.validate_side(false);
@@ -865,11 +750,6 @@ impl OrderBookDirectImpl {
         );
     }
 
-    // 对应 Java `OrderBookDirectImpl.checkBudgetToFill`：按对侧价位从优到劣依次累加，
-    // 算出吃满 `size` 所需的总预算（用 i128 累加防中间溢出，最终饱和截断到 i64::MAX，
-    // 对应 Java 用 `Math.multiplyExact` 抛异常的地方——这里选择饱和而非 panic，
-    // 语义等价于 Java 遇到溢出即视为"预算不可能满足"）；流动性不足以吃满时返回 i64::MAX
-    // （对应 Java 同样返回 `Long.MAX_VALUE` 表示"吃不满"）。
     fn check_budget_to_fill(&self, action: OrderAction, mut size: i64) -> i64 {
         let mut maker = if action == OrderAction::Bid { self.best_ask } else { self.best_bid };
         let mut budget: i128 = 0;
@@ -895,21 +775,11 @@ impl OrderBookDirectImpl {
         i64::MAX
     }
 
-    // 对应 Java `OrderBookDirectImpl.isBudgetLimitSatisfied`：预算是否落在限价约束内——
-    // `calculated == i64::MAX` 视为流动性不足直接不满足；否则 BID 要求实际花费
-    // 不超过预算上限（`calculated <= limit`），ASK 要求实际所得不低于预算下限
-    // （`calculated >= limit`），用异或写法对应 Java 的
-    // `orderAction == BID ^ calculated > limit`。
     fn is_budget_limit_satisfied(action: OrderAction, calculated: i64, limit: i64) -> bool {
         calculated != i64::MAX
             && (calculated == limit || ((action == OrderAction::Bid) != (calculated > limit)))
     }
 
-    // 普通 FOK（非预算版）用的可用量探测：在 `taker_price` 限价内，对侧总共能提供多少量，
-    // 上限截断到 `taker_size`（一旦累计达到就提前返回，避免遍历整本簿）。
-    // 与 Java 侧无直接对应方法——Java 没有实现普通 FOK（见 `new_order_match_fok` 处说明），
-    // 这里是 Rust 为了支持 `OrderType::Fok` 而新增的探测逻辑，作用类似于
-    // `checkBudgetToFill` 但按"量"而非"预算"累加。
     fn available_volume_for_match(&self, taker_action: OrderAction, taker_price: i64, taker_size: i64) -> i64 {
         let is_bid = taker_action == OrderAction::Bid;
         let mut maker = if is_bid { self.best_ask } else { self.best_bid };
@@ -934,10 +804,6 @@ impl OrderBookDirectImpl {
         available.min(taker_size as i128) as i64
     }
 
-    // 对应 Java `OrderBookEventsHelper.attachRejectEvent`：构造一个 REJECT 事件并接到
-    // `cmd.matcher_event` 链的最前面（`next: cmd.matcher_event.take()`，对应 Java
-    // `event.nextEvent = cmd.matcherEvent; cmd.matcherEvent = event`）——即 REJECT
-    // 总是出现在既有事件链之前（例如 IOC 部分成交后剩余部分被拒时，REJECT 排在 TRADE 之前）。
     fn attach_reject_event(cmd: &mut OrderCommand, rejected_size: i64) {
         let event = MatcherTradeEvent {
             event_type: MatcherEventType::Reject,
@@ -951,14 +817,6 @@ impl OrderBookDirectImpl {
         cmd.matcher_event = Some(Box::new(event));
     }
 
-    // 对应 Java `OrderBookDirectImpl.validateChain`（单侧展开版）：校验一条侧链
-    // （ask 或 bid）的全部不变式——best 订单的 next 必须为 None；链表沿 prev 方向无环；
-    // X.prev == Y 当且仅当 Y.next == X；每个订单的 action 与所在侧一致；
-    // 同价位订单共享同一个 parent 桶且共享同一 price；跨价位边界时价格必须严格朝
-    // "离 best 越远、越劣"的方向变化，且边界订单必须是各自桶的 tail；
-    // 每个桶聚合出的 volume/numOrders 必须与实际链上聚合值相符；
-    // 价位索引（`ask_price_buckets`/`bid_price_buckets`）与链上可达的桶集合必须严格一一对应
-    // （无索引存在但链不可达的孤儿桶，也无链可达但索引缺失的桶）。
     fn validate_side(&self, is_ask: bool) {
         let side_name = if is_ask { "ask" } else { "bid" };
         let best = if is_ask { self.best_ask } else { self.best_bid };
@@ -1086,10 +944,7 @@ impl Default for OrderBookDirectImpl {
 }
 
 impl IOrderBook for OrderBookDirectImpl {
-    // 对应 Java `OrderBookDirectImpl.newOrder`：按 `order_type` 分发到对应的下单路径
-    // （GTC/IOC/FOK/FOK_BUDGET/IOC_BUDGET）；不支持的类型对应 Java switch 的 default
-    // 分支（Java 侧会 log.warn + attachRejectEvent，这里用结果码
-    // `MatchingUnsupportedCommand` 表达，具体事件生成留给上层调用者）。
+
     fn new_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let rc = match cmd.order_type {
             Some(OrderType::Gtc) => {
@@ -1118,10 +973,6 @@ impl IOrderBook for OrderBookDirectImpl {
         rc
     }
 
-    // 对应 Java `OrderBookDirectImpl.cancelOrder`：按 order_id 查找并校验 uid 归属，
-    // 找不到或 uid 不匹配返回 `MatchingUnknownOrderId`；否则从索引/链表/桶中摘除该订单，
-    // 生成一个 REDUCE 事件（`active_order_completed = true` 表示订单被完全撤销），
-    // 并把原订单的 action 回填到 `cmd.action`（供上层事件处理使用）。
     fn cancel_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let order_idx = match self.order_id_index.get(&order_id) {
@@ -1160,10 +1011,6 @@ impl IOrderBook for OrderBookDirectImpl {
         CommandResultCode::Success
     }
 
-    // 对应 Java `OrderBookDirectImpl.reduceOrder`：按 `size` 参数减少订单未成交量，
-    // 若请求减少量 <= 0 直接返回 `MatchingReduceFailedWrongSize`；若减少量达到或超过
-    // 剩余量则等价于整单撤销（`can_remove`，走与 cancel 相同的移除路径），否则仅原地
-    // 缩减 `size` 并同步扣减所属桶的 volume；无论哪种情形都生成一个 REDUCE 事件。
     fn reduce_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let requested = cmd.size;
@@ -1223,13 +1070,6 @@ impl IOrderBook for OrderBookDirectImpl {
         CommandResultCode::Success
     }
 
-    // 对应 Java `OrderBookDirectImpl.moveOrder`：改价。先做风控——现货交易对
-    // （`CURRENCY_EXCHANGE_PAIR`）的 BID 单不允许把价格移到高于其 `reserve_bid_price`
-    // （超出风险预留的报价上限），否则返回 `MatchingMoveFailedPriceOverRiskLimit` 且
-    // 不产生任何副作用（对应 Java 提前 return，不回填 cmd.action）。通过风控后：
-    // 先把订单从旧价位摘除，更新价格，再以新价格作为限价重新尝试即时撮合
-    // （携带此前已有的 filled/filled_notional 一并结转）；若因此被完全吃满则直接释放
-    // 该 slab 槽位，否则把剩余部分插回新价位（复用摘除时释放出的旧桶，若有）。
     fn move_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         let order_id = cmd.order_id;
         let order_idx = match self.order_id_index.get(&order_id) {
@@ -1290,11 +1130,6 @@ impl IOrderBook for OrderBookDirectImpl {
         CommandResultCode::Success
     }
 
-    // 对应 Java `OrderBookDirectImpl.fillAsks`/`fillBids` 合并成的单一接口：按价位从优到劣
-    // （ask 升序、bid 降序，对应 Java `askPriceBuckets.forEach`/`bidPriceBuckets.forEachDesc`）
-    // 导出 L2 快照，每个价位一行（价格取该桶 tail 的 price，量/笔数取桶聚合值）。
-    // `size < 0` 表示不限量（`usize::MAX`），`size == 0` 返回空，语义与 Java 的
-    // `ORDER_BOOK_REQUEST` 处理（`size >= 0 ? size : Integer.MAX_VALUE`）一致。
     fn fill_l2(&self, size: i32) -> L2MarketData {
         let take: usize = match size {
             0 => 0,
@@ -1331,15 +1166,6 @@ impl IOrderBook for OrderBookDirectImpl {
         L2MarketData { ask_prices, ask_volumes, ask_orders, bid_prices, bid_volumes, bid_orders }
     }
 
-    // 与 Java `IOrderBook.stateHash`（默认方法，`Objects.hash(stateHashStream(asks),
-    // stateHashStream(bids), symbolSpec.stateHash())`，逐订单又依赖 Java
-    // `DirectOrder.hashCode()` 对 orderId/action/orderType/command/price/size/
-    // reserveBidPrice/filled/filledNotional/uid/userCookie 的组合）不是同一套算法：
-    // 这里是按订单链自定义的滚动哈希（31 进制多项式），且只纳入
-    // order_id/action/price/size/filled/reserve_bid_price/uid 几个字段（不含
-    // order_type/command/filled_notional/user_cookie，也不叠加 symbol_spec 的哈希）。
-    // 用途仅是 Rust 侧本地一致性校验（例如同一操作序列产生相同状态、Direct 与 Naive
-    // 对同一逻辑订单簿产出相同哈希），数值本身并不与 Java 的 stateHash 可比对。
     fn state_hash(&self) -> i32 {
         fn order_hash(o: &DirectOrder) -> i64 {
             let mut h: i64 = 17;
@@ -1369,9 +1195,6 @@ impl IOrderBook for OrderBookDirectImpl {
         ((h >> 32) as i32) ^ (h as i32)
     }
 
-    // 对应 Java `OrderBookDirectImpl.findUserOrders`：线性扫描全部挂单，筛出指定 uid 的，
-    // 转成值语义的 `Order` 列表返回。Java 注释标注这是慢路径（订单簿本身不维护
-    // uid -> orders 的反查索引），仅用于查询场景。
     fn find_user_orders(&self, uid: i64) -> Vec<Order> {
         self.order_id_index
             .values()
@@ -1399,18 +1222,6 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
-/// 对应 Java `OrderBookDirectImpl.writeMarshallable` / 反序列化构造函数
-/// `OrderBookDirectImpl(BytesIn, ObjectsPool, OrderBookEventsHelper, LoggingConfiguration)`
-/// 的 Chronicle Wire 快照格式实现。
-///
-/// 写出的第一个字节是订单簿实现类型标签（Java `IOrderBook.OrderBookImplType` 的 `code`），
-/// 用来在读快照时区分具体走哪个实现的反序列化逻辑：Java 定义
-/// `NAIVE(0)` / `DIRECT(2)`（`OrderBookImplType.of(byte)` 只认这两个值，其余抛
-/// `IllegalArgumentException`；注意没有值为 1 的实现——历史遗留的编号空隙）。
-/// 本文件对应的是 DIRECT，故写出/校验的都是字面量 `2`（对应 Java
-/// `getImplementationType().getCode()` 在 `OrderBookImplType.DIRECT` 上取到的值）；
-/// 写完标签字节后依次写 symbol spec、订单总数、再按 ask 全部、bid 全部的顺序逐个写订单
-/// （对应 Java `askOrdersStream(true).forEach(...)` 后接 `bidOrdersStream(true).forEach(...)`）。
 impl ChronicleMarshallable for OrderBookDirectImpl {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_u8(2);
@@ -1432,12 +1243,7 @@ impl ChronicleMarshallable for OrderBookDirectImpl {
 }
 
 impl OrderBookDirectImpl {
-    // 与 `chronicle_read` 共用的读取主体，跳过实现类型标签字节的校验——供上层（例如
-    // `IOrderBook::create` 对应的 Rust 分发逻辑）在已经读过/校验过标签字节之后复用。
-    // 对应 Java 反序列化构造函数里读完 `symbolSpec` 之后的部分：读订单总数，
-    // 再逐个按写出顺序读回订单并通过 `insertOrder` 重建链表/桶结构
-    // （Rust 侧额外按 action 把订单分流到 asks/bids 两个 Vec，再交给
-    // `restore_chronicle` 统一重建，而不是像 Java 那样边读边插入）。
+
     pub fn chronicle_read_body(r: &mut ChronicleReader) -> Result<Self, ChronicleError> {
         let symbol_spec = CoreSymbolSpecification::chronicle_read(r)?;
         let count = r.read_i32()?;

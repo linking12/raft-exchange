@@ -1,8 +1,6 @@
 #[cfg(test)]
 mod tests {
-    // 翻译自 Java `ITExchangeCoreIntegration`（现货/交易对场景，含 basicFullCycleTestExchange / exchangeRiskBasicTest /
-    // exchangeCancelBid / exchangeRiskMoveTest；ITExchangeCoreIntegrationBasic 仅是提供 PerformanceConfiguration 的空壳子类）
-    // 验证现货撮合的完整下单-成交-移价-撤单周期，以及 BID/ASK 风控冻结、NSF 拒绝、全局资金守恒
+
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::core_symbol_specification::CoreSymbolSpecification;
     use exchange_core_rs::core::common::matcher_event_type::MatcherEventType;
@@ -94,8 +92,6 @@ mod tests {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.risk().fees.get(&cur).copied().unwrap_or(0)
     }
 
-    // 对应 Java basicFullCycleTestExchange（共享 basicFullCycleTest 逻辑，SYMBOLSPEC_ETH_XBT 场景）：
-    // 挂单 -> IOC 部分成交 -> 挂新限价单 -> 移价触发撮合，全程校验 L2 盘口与全局资金守恒
     #[test]
     fn basic_full_cycle_exchange() {
         let mut api = setup();
@@ -143,7 +139,6 @@ mod tests {
         assert_eq!(total(&api, QUOTE), quote0, "QUOTE conserved");
     }
 
-    // 对应 Java exchangeRiskBasicTest：余额不足时下单应被 RISK_NSF 拒绝，充值后同一订单方可成功
     #[test]
     fn exchange_risk_basic_nsf_then_accept() {
         let mut api = ExchangeApi::new();
@@ -168,7 +163,6 @@ mod tests {
         assert_eq!(api.ups().get(UID_1).unwrap().locked(QUOTE), 210_000, "locked = 7×30000");
     }
 
-    // 对应 Java exchangeCancelBid：BID 挂单冻结资金，撤单后应全额释放
     #[test]
     fn exchange_cancel_bid() {
         let mut api = setup_exchange();
@@ -192,7 +186,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java exchangeRiskMoveTest：ASK/BID 移价的风控边界（reserveBidPrice 限制），以及移价触发撮合后的资金结算
     #[test]
     fn exchange_risk_move() {
         let mut api = setup_exchange();

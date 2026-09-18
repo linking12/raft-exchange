@@ -1,7 +1,3 @@
-//! Ported from the Java test class `ITLoanTargetedLiquidation.java`. Verifies the loan
-//! liquidation targeted (event-driven) path end-to-end: a loan-only user (no futures
-//! position) whose collateral spot pair crashes in mark price gets force-sold immediately,
-//! without any `LIQUIDATION_SCAN` being issued.
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -58,9 +54,6 @@ mod tests {
         }
     }
 
-    // Corresponds to Java collateralPriceCrash_targetedTriggersForceSell_withoutScan(): a mark-price
-    // crash on the collateral spot pair should force-liquidate the loan through the targeted
-    // (event-driven) path alone, with liquidation enabled but no scan ever issued.
     #[test]
     fn collateral_price_crash_targeted_triggers_force_sell_without_scan() {
         let mut api = ExchangeApi::new();

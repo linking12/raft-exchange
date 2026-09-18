@@ -1,7 +1,3 @@
-//! Rust 自建的期货强平端到端 + 属性测试套件。
-//! 未对应单个 Java 测试类,而是针对 `ExchangeCore` 完整流程(下单开仓、markprice
-//! 推进触发强平引擎、IF notional 结算)验证资金守恒(QUOTE/BASE)与 IF 可用余额
-//! 非负这两条不变量;最后一个用例用 proptest 对随机下单+markprice 命令流做压测。
 use proptest::prelude::*;
 
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -21,8 +17,6 @@ const BASE: i32 = 1;
 const QUOTE: i32 = 2;
 const FUT: i32 = 500;
 
-// 计算指定币种在全系统的守恒总量:用户余额 + 手续费池 + 调整池 + 持仓浮盈亏/追加保证金,
-// QUOTE 额外加上 IF notional 可用余额与 IF 持仓估值
 fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
     let mark = core.risk.last_price_cache.get(&FUT).map(|r| r.mark_price).unwrap_or(0);
     let mut total: i64 = core.ups.users.values().map(|u| u.account(cur)).sum();
@@ -46,14 +40,12 @@ fn conserved(core: &ExchangeCore, cur: i32) -> i64 {
     total
 }
 
-// 断言所有 IF notional 桶的可用余额均非负
 fn assert_if_non_negative(core: &ExchangeCore) {
     for n in core.risk.liquidation_service.notionals.values() {
         assert!(n.available >= 0, "IFNotional.available must not be negative: {}", n.available);
     }
 }
 
-// 构造一个永续合约的最小 symbol spec(单档维持保证金 + 清算手续费)
 fn fut_spec() -> CoreSymbolSpecification {
     let mut mm = std::collections::BTreeMap::new();
     mm.insert(i64::MAX, 500);
@@ -74,7 +66,6 @@ fn fut_spec() -> CoreSymbolSpecification {
     }
 }
 
-// 初始化一个带 n_users 个用户(各自预充值 QUOTE)、已开启强平引擎的 ExchangeCore
 fn seeded(n_users: i64) -> (ExchangeCore, Vec<i64>) {
     let mut core = ExchangeCore::new();
     core.ssp.add_currency(CoreCurrencySpecification { currency: BASE, currency_scale_k: 1, ..Default::default() });
@@ -90,7 +81,6 @@ fn seeded(n_users: i64) -> (ExchangeCore, Vec<i64>) {
     (core, uids)
 }
 
-// 下一笔限价单(GTC)并直接提交给 core
 fn place(core: &mut ExchangeCore, order_id: i64, uid: i64, price: i64, size: i64, bid: bool, leverage: i32) {
     let mut c = OrderCommand {
         command: OrderCommandType::PlaceOrder,
@@ -110,14 +100,11 @@ fn place(core: &mut ExchangeCore, order_id: i64, uid: i64, price: i64, size: i64
     core.process_command(&mut c);
 }
 
-// 推进 markprice,驱动强平引擎按新标记价重新评估持仓
 fn markprice(core: &mut ExchangeCore, price: i64, ts: i64) {
     let mut c = OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol: FUT, price, timestamp: ts, ..Default::default() };
     core.process_command(&mut c);
 }
 
-// markprice 下跌触发 borrower 仓位被强平引擎全额平仓(FORCE 全部成交),清算手续费应进入 IF,
-// 且期间 QUOTE(含 IF)与 BASE 均保持全局守恒
 #[test]
 fn force_full_fill_moves_fee_to_if_and_conserves() {
     let (mut core, uids) = seeded(3);
@@ -142,7 +129,6 @@ fn force_full_fill_moves_fee_to_if_and_conserves() {
     assert_if_non_negative(&core);
 }
 
-// 健康仓位(markprice 波动未跌破维持保证金)不应被强平引擎触发,资金保持守恒
 #[test]
 fn healthy_market_no_liquidation_conserves() {
     let (mut core, uids) = seeded(2);
@@ -155,14 +141,12 @@ fn healthy_market_no_liquidation_conserves() {
     assert_eq!(conserved(&core, QUOTE), before);
 }
 
-// proptest 随机命令流的两种变体:下单 或 推进 markprice
 #[derive(Debug, Clone)]
 enum GenCmd {
     Place { uid_idx: usize, price: i64, size: i64 },
     Mark { price: i64 },
 }
 
-// GenCmd 的随机生成策略
 fn cmd_strategy() -> impl Strategy<Value = GenCmd> {
     prop_oneof![
         (0usize..4, 80i64..120, 1i64..20).prop_map(|(uid_idx, price, size)| GenCmd::Place { uid_idx, price, size }),
@@ -173,8 +157,6 @@ fn cmd_strategy() -> impl Strategy<Value = GenCmd> {
 proptest! {
     #![proptest_config(ProptestConfig { cases: 120, ..ProptestConfig::default() })]
 
-    // 对随机下单/markprice 命令流(含强平触发)做压测,每步之后都断言 QUOTE/BASE 守恒、
-    // IF 可用余额非负、强平引擎无残留未处理命令
     #[test]
     fn conservation_holds_under_random_stream_with_liquidation(cmds in prop::collection::vec(cmd_strategy(), 1..40)) {
         let (mut core, uids) = seeded(4);

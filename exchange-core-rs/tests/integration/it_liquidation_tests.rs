@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
-    // 翻译自 Java `ITLiquidationIntegration`（仅移植不依赖多分片/leader机制的核心强平场景）
-    // 覆盖逐仓/全仓、多空、部分/全量、多用户及 LIQUIDATION_SCAN 切片等强平路径，并逐用例校验全局资金守恒
+
     use std::collections::BTreeMap;
 
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -72,8 +71,6 @@ mod tests {
         setup_btc_with_collector(entry).0
     }
 
-    /// 同 `setup_btc`，但在 `ExchangeCore` 上装一个 results_consumer 收集器（= Java `resultsConsumer`）并
-    /// 返回 `(api, collector)`，供需要观测级联 fund events 的用例。事件观测走生产机制,不在 `ExchangeApi` 上设。
     fn setup_btc_with_collector(entry: i64) -> (ExchangeApi, std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>) {
         let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let sink = collector.clone();
@@ -140,15 +137,12 @@ mod tests {
         api.user_position(uid, sym).map(|p| p.open_volume).unwrap_or(0)
     }
 
-    /// 触发 `set_mark_price`（inline 自驱级联）并收集本次触发 + 各级联子命令的 fund events；触发前先 clear
-    /// 掉 setup 阶段积累的事件。collector 由 `setup_btc_with_collector` 在 `ExchangeCore` 上装好。
     fn collect_cascade_on_mark(api: &mut ExchangeApi, collector: &std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>, symbol: i32, price: i64) -> Vec<FundEvent> {
         collector.borrow_mut().clear();
         assert_eq!(api.set_mark_price(symbol, price), CommandResultCode::Success);
         collector.borrow().clone()
     }
 
-    // 对应 Java testBasicLiquidationIsolatedMode：逐仓多头暴跌95%触发全量强平，校验强平级联事件流与资金守恒
     #[test]
     fn basic_liquidation_isolated_long() {
         let (trader, lp) = (1001i64, 2001i64);
@@ -191,7 +185,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testTargetedLiquidationByMarkPriceDrop_isolated：不发全量 LIQUIDATION_SCAN，仅靠 mark price 下跌事件驱动 targeted 强平
     #[test]
     fn targeted_liquidation_by_mark_price_drop_isolated() {
         let (trader, lp) = (1101i64, 2101i64);
@@ -217,7 +210,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testShortPositionLiquidation：逐仓空头持仓在价格暴涨时触发强平
     #[test]
     fn short_position_liquidation() {
         let (trader, lp) = (1003i64, 2003i64);
@@ -245,7 +237,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPartialLiquidation：流动性只够吃掉一半持仓，验证部分强平只减仓不清零
     #[test]
     fn partial_liquidation_reduces_position() {
         let (trader, lp) = (1004i64, 2004i64);
@@ -271,7 +262,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testMultipleUsersLiquidation：多个逐仓用户同时达到强平条件，验证系统能批量处理
     #[test]
     fn multiple_users_liquidation() {
         let traders = [1005i64, 1006, 1007, 1008, 1009];
@@ -307,7 +297,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 大致对应 Java testMultiUserCrossShardLiquidation（此处不含多分片断言）：6 个用户同时强平，流动性挂单被逐步吃掉
     #[test]
     fn multi_user_liquidation_liquidity_consumed() {
         let users = [1001i64, 1002, 1003, 1004, 1005, 1006];
@@ -348,7 +337,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testMixedMarginModeAcrossShards（此处不含多分片断言）：同一价格下跌下，逐仓仓位被强平，全仓仓位因保证金充足而存活
     #[test]
     fn mixed_margin_mode_isolated_liquidated_cross_survives() {
         let (cross1, cross2, iso1, iso2) = (4001i64, 4002i64, 4003i64, 4004i64);
@@ -387,7 +375,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testCrossMarginLiquidation：全仓用户在两个 symbol 上持仓，价格同时下跌，验证全仓强平只减到 equity ≥ maintenance 为止（不要求清零）
     #[test]
     fn cross_margin_liquidation_reduces_total_volume() {
         let (trader, lp) = (1002i64, 2002i64);
@@ -419,7 +406,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 未找到直接对应的 Java 测试：验证 LIQUIDATION_SCAN 命令的 uid 字段作为切片选择器，仅命中匹配 uid 的用户
     #[test]
     fn liquidation_scan_slice_only_covers_matching_uid() {
         let entry = 10_000i64;

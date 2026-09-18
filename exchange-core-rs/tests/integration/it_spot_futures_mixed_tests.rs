@@ -1,7 +1,3 @@
-//! 移植自 Java 测试类 ITSpotFuturesMixedIntegration.java：混合现货/期货场景，验证 exchangeLocked（现货挂单
-//! 冻结）在下单/取消/部分成交、资金费率结算、交割结算等各类事件后行为正确且全局资金守恒。
-//! 注：本文件只翻译了 ITSpotFuturesMixedIntegration.java 中与 exchangeLocked 记账相关的一部分场景
-//! （cancel/累加/提现/ASK锁定/成交释放/资金费/交割），未覆盖强平及 fund event 字段级校验等场景。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -195,7 +191,6 @@ mod tests {
         }
     }
 
-    // 对应 Java testSpotCancelReleasesLock()：现货挂单取消后 exchangeLocked 必须归零，accounts 全程不变。
     #[test]
     fn spot_cancel_releases_lock() {
         let mut api = setup_spot();
@@ -215,8 +210,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testMultipleSpotOrdersLockAccumulates()：同一 currency 多笔挂单 exchangeLocked 累加，
-    // 取消单笔只释放对应额度。
     #[test]
     fn multiple_spot_orders_lock_accumulates() {
         let mut api = setup_spot();
@@ -249,8 +242,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testWithdrawalBlockedBySpotLock()：exchangeLocked 阻止超额提现，可提现上限严格等于
-    // (accounts - exchangeLocked)。
     #[test]
     fn withdrawal_blocked_by_spot_lock() {
         let mut api = setup_spot();
@@ -268,7 +259,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testSpotAskLockBaseCurrency()：现货 ASK 挂单冻结 base 货币（与 quote 无关），取消后释放。
     #[test]
     fn spot_ask_lock_base_currency() {
         let mut api = setup_spot();
@@ -288,8 +278,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testSpotFillReleasesLock()：现货成交后双方 exchangeLocked 归零，accounts 精确更新，
-    // fees 正确入账。
     #[test]
     fn spot_fill_releases_lock() {
         let mut api = setup_spot();
@@ -312,8 +300,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testSpotLockAndFuturesMarginBothConstrainWithdrawal()：现货挂单冻结 + 期货保证金共同
-    //约束提现上限，两者都必须扣减才是真实可支配额度。
     #[test]
     fn spot_lock_and_futures_margin_both_constrain_withdrawal() {
         let mut api = setup_spot();
@@ -357,8 +343,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPartialFillReleasesPartialLock()：部分成交只释放已成交部分的 exchangeLocked，
-    // 取消余量后彻底清零。
     #[test]
     fn partial_fill_releases_partial_lock() {
         let mut api = setup_spot();
@@ -384,8 +368,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testRejectedOrderDoesNotModifyLock()：被 RISK_NSF 拒绝的下单不应留下任何 exchangeLocked
-    // 或 accounts 变化。
     #[test]
     fn rejected_order_does_not_modify_lock() {
         let mut api = setup_spot();
@@ -397,8 +379,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testBidAndAskLocksAreCurrencyIndependent()：BID 与 ASK 挂单分别独立维护 QUOTE 和 BASE
-    // 两个 exchangeLocked，互不影响。
     #[test]
     fn bid_and_ask_locks_are_currency_independent() {
         let mut api = setup_spot();
@@ -431,8 +411,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testSpotLockUnchangedAfterFundingFeeSettlement()：永续合约资金费率结算不应影响用户的
-    // 现货 exchangeLocked；资金费落到 position.profit，不直接扣减 accounts。
     #[test]
     fn spot_lock_unchanged_after_funding_fee_settlement() {
         let mut api = ExchangeApi::new();
@@ -476,8 +454,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testSpotLockSurvivesDelivery()：交割结算清空仓位并按 PnL 更新 accounts，但不应影响
-    // 用户的现货 exchangeLocked。
     #[test]
     fn spot_lock_survives_delivery() {
         let mut api = ExchangeApi::new();

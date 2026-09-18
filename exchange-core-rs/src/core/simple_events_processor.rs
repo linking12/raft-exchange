@@ -12,21 +12,11 @@ use crate::core::trade_events_handler::{
     ExecutionIdGenerator, FuturesExecutionReport, OrderBook, OrderBookRecord, SpotExecutionReport, TradeEventsHandler,
 };
 
-/// 对应 Java `SimpleEventsProcessor`（原实现 `ObjLongConsumer<OrderCommand>`，挂在 Disruptor 结果处理器上）。
-/// Rust 侧接为 `ExchangeCore.results_consumer`：`process_command` 对主命令 + 每条级联子命令各触发一次
-/// `process`，只读透传 `ssp`(取 spec/scale) + `ups`(查持仓模式)，不吃整个 `&ExchangeCore`。
-/// Java 用 `seq < 0` 区分「来自 R2 风控阶段，只发 fund events」；Rust 单线程管线里 R1/ME/R2 在一次
-/// `process_command` 内跑完，`process` 固定按 execution report → fund events → market data 全量顺序发送，
-/// 无需 Java 那个符号位分支。
 pub struct SimpleEventsProcessor<T: TradeEventsHandler, F: FundEventsHandler> {
     trade: T,
     fund: F,
 }
 
-/// 调试/测试用事件 handler：把 `SimpleEventsProcessor` 产出的每条执行回报 / 资金事件 / 盘口快照直接
-/// `println!` 打到标准输出（`cargo test -- --nocapture` 即可见），用来观测真实事件流。挂法：
-/// `ExchangeCore::with_results_consumer(Box::new(move |cmd, seq, ssp, ups| proc.process(cmd, seq, ssp, ups)))`，
-/// 其中 `proc = SimpleEventsProcessor::new(LoggingEventsHandler, LoggingEventsHandler)`。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LoggingEventsHandler;
 
@@ -53,7 +43,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         SimpleEventsProcessor { trade, fund }
     }
 
-    /// 对应 Java `SimpleEventsProcessor.accept` 的主流程分支（`seq >= 0`）。
     pub fn process(
         &mut self,
         cmd: &OrderCommand,
@@ -78,7 +67,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         (self.trade, self.fund)
     }
 
-    // 对应 Java `SimpleEventsProcessor.sendExecutionReport`：按 symbol 类型分派到现货/期货报告构造。
     fn send_execution_report(
         &mut self,
         cmd: &OrderCommand,
@@ -99,8 +87,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
-    // 对应 Java `SimpleEventsProcessor.sendSpotExecutionReport`：NEW → REJECT → CANCEL/REDUCE(提前返回) →
-    // 按 matcher_event 链表遍历逐笔 TRADE（taker/maker 各发一条）。顺序与 Java 严格一致，供下游按序重放。
     fn send_spot_execution_report(&mut self, cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification) {
         let first = cmd.matcher_event.as_deref();
         if cmd.command == OrderCommandType::PlaceOrder && cmd.result_code == Some(CommandResultCode::Success) {
@@ -133,8 +119,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
-    // 对应 Java `SimpleEventsProcessor.sendFuturesExecutionReport`：结构同现货版，额外查 taker/maker 各自
-    // 的持仓模式（position_side）附加到回报里；Java 按 uid 分片查 UserProfileService，Rust 单 shard 直查 ups。
     fn send_futures_execution_report(&mut self, cmd: &OrderCommand, seq: i64, spec: &CoreSymbolSpecification, ups: &UserProfileService) {
         let first = cmd.matcher_event.as_deref();
         let taker_side = position_mode_of(ups, cmd.uid);
@@ -169,10 +153,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
-    // 对应 Java `SimpleEventsProcessor.sendFundEvents`：Java 要在 taker 链表(cmd.takerFundEvents)与
-    // per-shard maker 链表数组(cmd.makerFundEventsByShard)上各走一遍，靠 `processed` 标记去重
-    // （同一事件可能在多 shard 场景下被路由到不止一次遍历）。Rust 撮合塌缩为单 shard，事件已在
-    // `cmd.fund_events` 收敛成一个扁平 Vec，直接顺序遍历即可，不需要 processed 去重。
     fn send_fund_events(&mut self, cmd: &OrderCommand, seq: i64) {
         for (index, fe) in cmd.fund_events.iter().enumerate() {
             let uni_id = ExecutionIdGenerator::build_trade_exec_id(seq, index as i32, false);
@@ -180,8 +160,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
         }
     }
 
-    // 对应 Java `SimpleEventsProcessor.sendMarketData`：把 cmd 上挂的 L2 快照转成对外 OrderBook，
-    // 缺失 spec 时 Java 记错误日志但仍以 scale=0 发出（按设计不可达）；Rust 简化为直接兜底 0。
     fn send_market_data(&mut self, cmd: &OrderCommand, ssp: &SymbolSpecificationProvider) {
         let Some(md) = &cmd.market_data else { return };
         let asks = md
@@ -206,8 +184,6 @@ impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
     }
 }
 
-// 对应 Java `SimpleEventsProcessor.isReportableCommand`：纯订单生命周期指令（含 CLOSE_POSITION/
-// FORCE_LIQUIDATION——两者内部也走 orderBook.newOrder）才生成 execution report。
 fn is_reportable_command(command: OrderCommandType) -> bool {
     matches!(
         command,
@@ -220,8 +196,6 @@ fn is_reportable_command(command: OrderCommandType) -> bool {
     )
 }
 
-// 对应 Java 内联的 `userProfileServices.get(shardIdOfUid(uid)).getUserProfile(uid).positionMode`
-// 查询（单 shard 塌缩后无需按 uid 分片路由）。
 fn position_mode_of(ups: &UserProfileService, uid: i64) -> PositionMode {
     ups.get(uid).map(|u| u.position_mode).unwrap_or_default()
 }
@@ -353,8 +327,6 @@ mod tests {
         assert!(!proc.fund_handler().fund.is_empty(), "spot trade should produce fund event reports");
     }
 
-    // 验证 SimpleEventsProcessor 作为 ExchangeCore.results_consumer 接线生效：挂成回调，由 process_command
-    // 逐命令触发（= Java resultsConsumer 每条命令 accept 一次），而非调用方手动调 process。
     #[test]
     fn wired_as_results_consumer_fires_per_command_via_process_command() {
         use std::cell::RefCell;
@@ -388,7 +360,6 @@ mod tests {
         };
         run(&mut core, &mut maker);
 
-        // 接线：SimpleEventsProcessor 挂成 results_consumer（共享持有以便事后读回执）。
         let proc = Rc::new(RefCell::new(SimpleEventsProcessor::new(TradeRec::default(), FundRec::default())));
         let sink = proc.clone();
         core.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| sink.borrow_mut().process(cmd, seq, ssp, ups)));
@@ -405,8 +376,6 @@ mod tests {
         assert!(!pr.fund_handler().fund.is_empty(), "consumer forwarded fund events too");
     }
 
-    // 挂真事件 handler `LoggingEventsHandler` 跑一笔现货成交：执行回报 + 资金事件经 process_command →
-    // results_consumer 直接 println 打到标准输出（`cargo test -- --nocapture` 可见），验证事件流端到端产出。
     #[test]
     fn logging_events_handler_emits_events_through_process_command() {
         let mut core = ExchangeCore::new();

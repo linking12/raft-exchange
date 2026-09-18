@@ -1,7 +1,3 @@
-//! 对应 Java 测试类 `ITLoanFailoverSnapshot.java` 的移植：验证 loan 状态（loan records + LoanService
-//! 池子/收入/LIF 桶 + 动态利率 currentRateBps/lastRepriceTs）完整进快照，恢复后与原实例逐字节一致
-//! （`to_snapshot_bytes()` round-trip）且全局守恒——failover 安全性的核心前提。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -107,13 +103,9 @@ mod tests {
     const BORROWER: i64 = 9001;
     const LP: i64 = 9002;
 
-    // 对应 Java loanState_survivesSnapshotRestore_identicalHashAndConserved() 的场景：建一笔 isolated 贷款
-    // 后用无对手盘的强平使其全拒（触发 LIF 接管，loan1 移除）、再开一笔 cross 贷款，验证快照前后全局守恒，
-    // 且 to_snapshot_bytes()/from_snapshot_bytes() round-trip 后状态逐字节一致（loan records + 池子/LIF 桶都在快照里）。
-    // 注：Java 版走的是真实磁盘快照 + 独立容器恢复 + stateHash 比对，这里用内存态字节 round-trip 直接验证同一不变式。
     #[test]
     fn loan_state_survives_snapshot_restore_identical_bytes_and_conserved() {
-        // 共享内存后端:leader persist → follower(fresh core)recover,模拟 failover。
+
         let shared = InMemorySerializationProcessor::new();
         let mut core = ExchangeCore::new(); core.with_serialization_processor(Box::new(shared.clone()));
         core.ssp.add_currency(CoreCurrencySpecification { currency: WBTC, currency_scale_k: 100, collateral_weight_bps: 10_000, ..Default::default() });
@@ -148,7 +140,7 @@ mod tests {
 
         let mut recovered = ExchangeCore::new(); recovered.with_serialization_processor(Box::new(shared.clone()));
         recovered.recover(1, 0);
-        // recovered 重新 persist 到快照 2,两模块 payload 与快照 1 逐字节相等。
+
         assert!(recovered.persist(2, 0));
         assert_eq!(
             shared.load_data(2, SerializedModuleType::RiskEngine, 0),
@@ -180,10 +172,6 @@ mod tests {
         core.ups.get(RC_BORROWER).unwrap().isolated_loans.get(&loan_id).expect("isolated loan not found").rate_bps
     }
 
-    // 对应 Java loanRateState_survivesSnapshotRestore_repricedCurveRatePreserved() 的场景：补齐上一测试
-    // 只 round-trip 默认利率状态的缺口——配非默认曲线、建仓制造非零利用率、reprice 把 currentRateBps
-    // 写成 curve(util)=240（≠ base 200），验证该动态利率状态随快照 round-trip 存活，恢复后新开的
-    // FLOATING 贷款仍按 240 开仓（而非回退到 base 200）。
     #[test]
     fn loan_rate_state_survives_snapshot_restore_repriced_curve_rate_preserved() {
         let shared = InMemorySerializationProcessor::new();

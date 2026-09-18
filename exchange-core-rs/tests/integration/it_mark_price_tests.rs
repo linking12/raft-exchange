@@ -1,8 +1,3 @@
-//! Ported from the Java test class `ITExchangeCoreMarkPrice.java`. Verifies mark-price-driven
-//! risk mechanics for futures: no placing futures orders without a mark price (spot is
-//! unaffected), init/maintenance margin and locked-margin values derived from mark price,
-//! tiered leverage/maintenance-margin tables, and liquidation triggered by mark-price moves
-//! under both isolated and cross margin.
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -68,8 +63,6 @@ mod tests {
         assert_eq!(api.balance_adjustment(uid, currency, amount, txid), CommandResultCode::Success);
     }
 
-    // Corresponds to Java testSubmitFailWhenNoMarkPrice(): placing a futures order is rejected
-    // without a mark price and succeeds once one is set.
     #[test]
     fn test_submit_fail_when_no_mark_price() {
         let spec = symbol_spec();
@@ -90,8 +83,6 @@ mod tests {
         );
     }
 
-    // Corresponds to Java testSubmitPassWhenNoMarkPrice(): a spot order should succeed even
-    // without a mark price, since spot risk checks do not depend on it.
     #[test]
     fn test_submit_pass_when_no_mark_price() {
         let spot = CoreSymbolSpecification {
@@ -128,8 +119,6 @@ mod tests {
         );
     }
 
-    // Corresponds to Java testTieredLeverage(): opening beyond a leverage tier's notional cap
-    // is rejected until the user's per-symbol leverage is lowered to fit the tier.
     #[test]
     fn test_tiered_leverage() {
         let spec = symbol_spec();
@@ -181,11 +170,6 @@ mod tests {
             .expect("position report record should exist")
     }
 
-    // Covers the report-derived-margin portion of Java testMarkPrice(): user init margin must be
-    // computed from mark price, both while pending (estimated off the order price) and after a
-    // partial fill (openInitMarginSum/liquidationPrice/marginRatioScaleK derived from mark price).
-    // Unlike the Java test, this does not go on to crash the price and trigger liquidation — that
-    // scenario is covered separately by test_init_margin_and_maintenance_margin below.
     #[test]
     fn test_mark_price_report_derived_margin() {
         let price = 680i64;
@@ -233,9 +217,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // Corresponds to Java testInitMarginAndMaintenanceMargin(): open_init_margin_sum tracks mark
-    // price through partial fills, mark-price changes, and a reduction, then a further mark-price
-    // drop below the liquidation threshold fully closes the isolated position.
     #[test]
     fn test_init_margin_and_maintenance_margin() {
         let spec = symbol_spec();
@@ -290,9 +271,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // Corresponds to Java testTieredMaintenanceMargin(): maintenance margin and liquidation price
-    // are derived from the tiered maintenance-margin table as position notional crosses tiers,
-    // and the position is fully liquidated once mark price reaches the liquidation price.
     #[test]
     fn test_tiered_maintenance_margin() {
         let spec = symbol_spec();
@@ -329,8 +307,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // Corresponds to Java testCrossMarginLiquidation(): under cross margin mode, the liquidation
-    // price is computed correctly and the position is fully closed once mark price reaches it.
     #[test]
     fn test_cross_margin_liquidation() {
         const SYMBOL_ID: i32 = 2;

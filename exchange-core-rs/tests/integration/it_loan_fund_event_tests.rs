@@ -1,8 +1,3 @@
-//! 对应 Java 测试类 `ITLoanFundEvent.java` 的移植：验证 loan 事件的两侧余额快照——借贷侧走通用
-//! free/locked，抵押侧走 loan_collateral_free/locked。刻意选 currencyScale 不同的两个币
-//! （WBTC digit=2 → scaleK=100；USDT digit=0 → scaleK=1），证明两侧各自下发自己的 scale；
-//! 并覆盖 cross 场景下币种为 0 的 zero-guard 分支，以及利息累计快照的单调性语义。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -85,8 +80,6 @@ mod tests {
         }
     }
 
-    // initialLtv 6000 / liqLtv 8500 / marginCall 7500 / 无上限金额 / 期限 365d / 抵押权重满额 10000，
-    // 池子注资 1_000_000 USDT，借款人账户已建但未注资抵押（各测试按需追加）。
     fn boot() -> ExchangeCore {
         let mut core = ExchangeCore::new();
         core.ssp.add_currency(CoreCurrencySpecification { currency: WBTC, currency_scale_k: 100, collateral_weight_bps: 10_000, ..Default::default() });
@@ -107,9 +100,6 @@ mod tests {
         submit(core, cmd_loan_create(10, BORROWER, SYMBOL, 1, COLLATERAL, PRINCIPAL, ts))
     }
 
-    // 对应 Java loanBorrow_carriesBothSidesBalances()：LOAN_BORROW 事件同时携带借贷侧（USDT，直接进
-    // accounts、free=本金、不锁定）和抵押侧（WBTC，虚拟锁定、locked=已质押量、free 归零）两组独立快照，
-    // 且各自下发各自的 currency/scale（WBTC digit=2 → scaleK=100，USDT digit=0 → scaleK=1）。
     #[test]
     fn loan_borrow_carries_both_sides_balances() {
         let mut core = boot();
@@ -132,8 +122,6 @@ mod tests {
         assert_eq!(s.loan_ltv_bps, 5333, "LTV (bps)");
     }
 
-    // 对应 Java loanRepay_carriesBothSidesAndInterestPaid()：isolated 还款事件同样携带两侧余额，
-    // 外加本次实付利息（rate=0 时同一时间戳无利息，全部冲本金）；抵押不受还款影响，原样保持锁定。
     #[test]
     fn loan_repay_carries_both_sides_and_interest_paid() {
         let mut core = boot();
@@ -152,8 +140,6 @@ mod tests {
         assert_eq!(s.loan_collateral_free, 0);
     }
 
-    // 对应 Java interestPaidTotal_isMonotonicCumulative()：loan_interest_paid_total 是单调不减的累计快照
-    // （非本次 delta），两次还款事件的差值即为本次实付利息——落地验证"事件只发快照、不发 delta"的语义。
     #[test]
     fn interest_paid_total_is_monotonic_cumulative() {
         let mut core = boot();
@@ -181,9 +167,6 @@ mod tests {
         assert!(cum1 > 0, "with base=1200bps accruing for 1yr, this repayment should indeed carry interest");
     }
 
-    // 对应 Java crossBorrow_collateralSideAllZero()：cross 借款无唯一抵押币，抵押侧整组字段
-    // （currency/scale/pledged/free/locked）都应为 0，且 currency=0 时 scale 也走 zero-guard 归零
-    // （未去查币种表），验证借贷侧照常填充、抵押侧整组清零两个分支都不出错。
     #[test]
     fn cross_borrow_collateral_side_all_zero() {
         let mut core = boot();
@@ -205,8 +188,6 @@ mod tests {
         assert_eq!(s.loan_collateral_locked, 0);
     }
 
-    // 对应 Java crossAddCollateral_debtSideZero_collateralSideFilled()：cross 加抵押无唯一借款币，
-    // 借贷侧整组字段应为 0（同样走 zero-guard），抵押侧照常填充为账户级抵押池的真实余额。
     #[test]
     fn cross_add_collateral_debt_side_zero_collateral_side_filled() {
         let mut core = boot();

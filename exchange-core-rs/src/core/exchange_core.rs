@@ -14,18 +14,8 @@ use crate::core::snapshot::serialization_processor::{
     InMemorySerializationProcessor, SerializationProcessor, SerializedModuleType,
 };
 
-/// 逐命令结果回调签名（= Java `ObjLongConsumer<OrderCommand> resultsConsumer`）：主命令与每条级联
-/// 子命令处理完各触发一次。`SimpleEventsProcessor` 只读 `ssp`(取 spec/scale)+ `ups`(查持仓模式),
-/// 故只透传这两块引擎片段(不相交借用),不吃整个 `&ExchangeCore`。
 type ResultsConsumer = Box<dyn FnMut(&OrderCommand, i64, &SymbolSpecificationProvider, &UserProfileService)>;
 
-/// 对应 Java `ExchangeCore`：Java 版是把 RiskEngine(R1 预处理/R2 风控释放)、MatchingEngineRouter(ME)
-/// 通过 LMAX Disruptor 组装成多阶段流水线（G 分组 → [J 落盘] ‖ R1 → ME → R2 → E 结果处理，
-/// 各阶段可多 shard 并行），并负责 disruptor 生命周期(startup/shutdown)与线程池装配。
-/// Rust 版把整条流水线塌缩为单线程、单 shard 的确定性管线：一次 `process_command` 内同步依次跑
-/// R1(`risk.pre_process_command`) → ME(`matching.process_order`) → R2(`risk.handler_risk_release`)，
-/// 不经过队列/线程边界，天然满足 Raft 状态机对确定性重放的要求；`RiskEngine`/`MatchingEngineRouter`
-/// 是本 crate 内被塌缩的等价物，字段语义仍与 Java 逐一对应。
 pub struct ExchangeCore {
     pub risk: RiskEngine,
     pub matching: MatchingEngineRouter,
@@ -35,11 +25,7 @@ pub struct ExchangeCore {
     ser_proc: Box<dyn SerializationProcessor>,
     results_consumer: Option<ResultsConsumer>,
     results_seq: i64,
-    /// 周期强平发令器（对应 Java `LiquidationEngine extends LiquidationScheduledService` 里"每 tick 发什么
-    /// 命令"的确定性部分）。由引擎驱动：`start/stop_liquidation_scheduler` 是 leader 门控（= Java
-    /// `start()/stop()`），`tick_liquidation_scheduler(now)` 是每个调度 tick 的驱动（= Java `runOneIteration`）。
-    /// 墙钟脉冲由外层 server 每 interval 调一次 tick 提供（`!Send` 引擎内不放时钟线程）；scheduler 的
-    /// `command_submitter` 与引擎共用同一 sink（单节点 pending / 集群 raft）。
+
     liquidation_scheduler: LiquidationScheduler,
 }
 
@@ -50,12 +36,7 @@ impl Default for ExchangeCore {
 }
 
 impl ExchangeCore {
-    // ──────────────── 构造 & 注册（new 装默认，with_* 覆盖）────────────────
 
-    /// 构造函数：装好默认——内存序列化后端（`InMemorySerializationProcessor`）、本地单节点命令出口
-    /// （塞 `pending_commands`）。结果回调默认不装（`None`，不产事件、零开销）。外部通过下面的 `with_*`
-    /// 覆盖：`with_serialization_processor`（换 Disk 后端）/ `with_command_submitter`（换 raft 出口）/
-    /// `with_results_consumer`（挂 `SimpleEventsProcessor` 产事件）。
     pub fn new() -> Self {
         let mut core = ExchangeCore {
             risk: RiskEngine::new(),
@@ -68,9 +49,7 @@ impl ExchangeCore {
             results_seq: 0,
             liquidation_scheduler: LiquidationScheduler::new(10, 30, 0),
         };
-        // 默认命令出口 = 本地单节点：强平引擎 + loan 子引擎 + scheduler 的 command_submitter 都塞进 pending_commands
-        // （= Java 单节点 setCommandSubmitter(api::submitCommand)，api = 入 ring buffer）。集群走
-        // with_command_submitter override 成 raft。
+
         let pending = core.pending_commands.clone();
         core.with_command_submitter(move || {
             let sink = pending.clone();
@@ -79,18 +58,10 @@ impl ExchangeCore {
         core
     }
 
-    /// 覆盖序列化后端（默认 `InMemorySerializationProcessor`）。对应 Java 由
-    /// `SerializationConfiguration.serializationProcessorFactory` 注入 `ISerializationProcessor`
-    /// （Disk/Memory/Dummy）；`persist`/`recover` 经它按 per-(module, instanceId) 落盘/加载。
     pub fn with_serialization_processor(&mut self, ser_proc: Box<dyn SerializationProcessor>) {
         self.ser_proc = ser_proc;
     }
 
-    /// 覆盖系统自生成命令（scan / FORCE / IF / ADL / reprice）的提交出口（= Java
-    /// `liquidationEngine.setCommandSubmitter(...)`）。`new` 装的是本地默认出口（塞 `pending_commands`）;
-    /// **集群下外层调本方法 override 成 raft 提交**——与 Java 单节点/集群切换 `setCommandSubmitter` 目标
-    /// (ring buffer / raft)一致,每条命令各自提交。强平引擎、loan 子引擎、scheduler 各需一份捕获同一 sink
-    /// 的回调,而 `Box<dyn FnMut>` 不可 clone,故收工厂 `make`,给每个发令方各铸一份。
     pub fn with_command_submitter<F>(&mut self, make: F)
     where
         F: Fn() -> Box<dyn FnMut(OrderCommand)>,
@@ -99,22 +70,10 @@ impl ExchangeCore {
         self.risk.liquidation_engine.set_command_submitter(make);
     }
 
-    /// 覆盖逐命令结果回调（= Java `resultsConsumer`，通常是 `SimpleEventsProcessor`）。
     pub fn with_results_consumer(&mut self, consumer: ResultsConsumer) {
         self.results_consumer = Some(consumer);
     }
 
-    // ─────────────────────────── 命令处理流水线 ───────────────────────────
-
-    /// 对应 Java `ExchangeCore` 流水线核心：R1(`RiskEngine.preProcessCommand`) → ME
-    /// (`MatchingEngineRouter.processOrder`) → R2(`RiskEngine.handlerRiskRelease`)。Java 里三段分别
-    /// 跑在 Disruptor 不同 handler 阶段（可能不同线程/shard），此处塌缩为一次函数调用内的三步同步执行，
-    /// 保证同一条命令的处理结果在任意节点、任意时刻重放都完全确定（Raft 状态机要求）。
-    /// `RESET` 单独短路：不经过 R1/ME/R2，直接清空全部业务状态后返回（对应 Java RiskEngine/
-    /// MatchingEngineRouter 各自 `case RESET` 分支）。主命令处理完后 inline 自驱 `pending_commands`：
-    /// 单节点回调塞了 FORCE/IF/ADL → 逐条再走 R1→ME→R2 直到清空；集群回调走 raft → pending 恒空、
-    /// 循环 no-op（级联由 raft 回流每条各自一次 `process_command` 驱动）。每条命令在 `apply_one` 末尾触发
-    /// `results_consumer`（= Java disruptor 对每条 ring buffer 命令触发 `resultsConsumer`）。
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
         log::trace!(
             "process_command enter: cmd={:?} uid={} symbol={} order_id={}",
@@ -138,8 +97,6 @@ impl ExchangeCore {
         self.drive_pending();
     }
 
-    /// 驱动 `pending_commands`（单节点自驱 / 集群 no-op）：每弹一批逐条走 R1→ME→R2，新生成的又进队列，
-    /// 直到清空。单节点回调塞了 FORCE/IF/ADL/scan → 排空即级联；集群回调走 raft → pending 恒空、循环 no-op。
     fn drive_pending(&mut self) {
         loop {
             let batch: Vec<OrderCommand> = std::mem::take(&mut *self.pending_commands.borrow_mut());
@@ -152,9 +109,6 @@ impl ExchangeCore {
         }
     }
 
-    /// 一条命令走完 R1→ME→R2 并触发结果回调（主命令与每条级联子命令共用同一步序）。末尾逐命令触发
-    /// `results_consumer`（= Java `resultsHandler.onEvent(cmd, seq)`）：`results_consumer`(可变借用)与
-    /// `ssp`/`ups`(只读借用)是不相交字段,借用检查器允许同时借。
     fn apply_one(&mut self, cmd: &mut OrderCommand) {
         self.risk.pre_process_command(cmd, &mut self.ups, &self.ssp);
         self.matching.process_order(cmd);
@@ -166,32 +120,19 @@ impl ExchangeCore {
         }
     }
 
-    // ─────────── 周期强平发令器（引擎驱动，leader 门控，= Java LiquidationScheduledService）───────────
-
-    /// leader 上线：启动周期发令（= Java `LiquidationScheduledService.start()` 置 `running=true`）。外层
-    /// server 在成为 leader 时调；之后每个墙钟 tick 调 `tick_liquidation_scheduler`。
     pub fn start_liquidation_scheduler(&mut self) {
         self.liquidation_scheduler.is_running = true;
     }
 
-    /// leader 下台：停止周期发令（= Java `stop()`）。
     pub fn stop_liquidation_scheduler(&mut self) {
         self.liquidation_scheduler.is_running = false;
     }
 
-    /// 每个调度 tick 驱动一次（= Java `runOneIteration`，由外层 server 的墙钟每 interval 调）。leader-gated：
-    /// 非 leader（`is_running=false`）no-op。leader 上产 `LIQUIDATION_SCAN`/`REPRICE_LOAN_RATES` → scheduler
-    /// 的 `command_submitter` 回调 → 单节点塞 `pending`（随即自驱排空 = 就地跑扫描/级联）/ 集群提交 raft。
     pub fn tick_liquidation_scheduler(&mut self, now: i64) {
         self.liquidation_scheduler.run_one_iteration(now);
         self.drive_pending();
     }
 
-    // 对应 Java `RiskEngine.reset()`(清 userProfileService/liquidationService/loanService/
-    // symbolSpecificationProvider/currencySpecificationProvider/lastPriceCache/fees/adjustments/
-    // suspends) + `MatchingEngineRouter` 的 `case RESET`(清 orderBooks)。Rust 侧 SSP/UPS/RiskEngine/
-    // MatchingEngineRouter 各自持有独立状态，这里逐一清空后重建现货对索引（Java 无此索引，Rust 的
-    // spot_pair_index 是塌缩单 shard 后新增的辅助结构，清空后必须显式 rebuild 而非留脏）。
     fn reset(&mut self) {
         self.risk.reset();
         self.ups.users.clear();
@@ -201,17 +142,9 @@ impl ExchangeCore {
         self.matching.reset();
     }
 
-    // ─────────────────────────── 快照 persist / recover ───────────────────────────
-
-    /// 对应 Java `RiskEngine`/`MatchingEngineRouter` 各自实现 `WriteBytesMarshallable`（Chronicle Wire
-    /// 二进制编码）产生 RE/ME 两个独立快照模块。RE(risk-engine) 模块覆盖 symbol/currency specs、
-    /// UserProfileService(账户/仓位/挂单)、RiskEngine 自身(fees/adjustments/suspends/last_price_cache/
-    /// loan_service/liquidation_service) 等*复制态*；ME(matching-engine) 模块覆盖撮合簿(order_books)。
-    /// 两段独立编码、独立传输，与 Java 侧 `PERSIST_STATE_RISK`/`PERSIST_STATE_MATCHING` 两条独立持久化
-    /// 指令的模块划分一致，供上层 Raft 快照分别落盘/传输。
     pub fn persist(&mut self, snapshot_id: i64, instance_id: i32) -> bool {
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
-        // 模块层只产 raw payload；framing 由 processor 负责（对齐 Java storeData 内部 WireToOutputStream）。
+
         let re = crate::core::processors::risk_engine::write_risk_engine_payload(self);
         let mut w = crate::core::snapshot::chronicle_writer::ChronicleWriter::new();
         self.matching.chronicle_write(&mut w);
@@ -222,12 +155,6 @@ impl ExchangeCore {
         ok_re && ok_me
     }
 
-    /// 对应 Java `RiskEngine.recoverStateBySnapshot`/`MatchingEngineRouter.recoverStateBySnapshot`：
-    /// 经持有的 `ISerializationProcessor.loadData` 按 per-(module, instanceId) 取回两模块 payload、
-    /// 反序列化进 risk/matching/ups/ssp 复制态，再原子生效。解出复制态后必须调用
-    /// `restore_non_replicated_state` 重建快照里*没有*编码的派生索引/临时字段——这一步 Java/Rust
-    /// 都需要（Java 见 `LiquidationEngine.updateProvider`），因为这些字段要么是纯内存缓存（重放开销
-    /// 小于序列化成本），要么在快照写入时被有意排除（如 ADL 资格/待 ADL 量/清算流水这类瞬时状态）。
     pub fn recover(&mut self, snapshot_id: i64, instance_id: i32) {
         use crate::core::snapshot::chronicle_reader::ChronicleReader;
         use crate::core::snapshot::marshalling::ChronicleMarshallable;
@@ -245,16 +172,6 @@ impl ExchangeCore {
         self.restore_non_replicated_state();
     }
 
-    // 对应 Java 快照恢复后的派生状态重建：
-    // 1) SSP 的现货对唯一性索引本就是 Rust 侧新增的辅助结构（Java 无此索引），恒需 rebuild。
-    // 2) 逐仓/全仓 ADL 资格(adl_eligibility)、待 ADL 量(pending_adl_size)、清算流水(liquidation_flow)
-    //    复位为"刚重启"的初值——对应 Java `SymbolPositionRecord` 构造函数/`reset()` 里的默认值
-    //    （ISOLATED=100 全仓=0），这三个字段要么是运行期缓存要么是本地进行中状态，快照里不落盘。
-    // 3) 期货持仓量>0 的用户重新灌入 `LiquidationEngine.symbol_to_users` 索引（symbol→持仓人集合），
-    //    对应 Java `LiquidationEngine.updateProvider` 遍历全体 UserProfile 重建同一索引的逻辑；
-    //    该索引用于清算扫描定位候选人，快照里同样不落盘（纯粹可从复制态推导，重建比序列化更省）。
-    // 4) loan 侧同理委托 `loan_liquidation_engine.rebuild_indices` 重建 isolated/cross loan 的
-    //    symbol→borrower 索引。
     fn restore_non_replicated_state(&mut self) {
         self.ssp.rebuild_spot_pair_index();
         for up in self.ups.users.values_mut() {
@@ -982,9 +899,6 @@ mod liquidation_engine_e2e_tests {
         assert_eq!(conserved(&core), before, "globally conserved after force liquidation (incl. liquidation fee transferred to IF)");
     }
 
-    // 集群模式（command_submitter 注册成 collector = raft 提交出口）：markprice 触发生成的 FORCE 被交给
-    // submitter（外层去走 raft 共识），引擎本进程内不 apply——对照上面的单节点用例（同一场景下 FORCE 会
-    // 就地排空、借款人仓位被平掉）。
     #[test]
     fn cluster_mode_hands_cascade_to_submitter_without_inline_apply() {
         use std::cell::RefCell;
@@ -1018,8 +932,6 @@ mod liquidation_engine_e2e_tests {
         );
     }
 
-    // 模拟 raft 全程：submitter 把二级命令收进队列（= 提交进共识），逐条"共识后回流"再 apply；每条 apply
-    // 又可能生成下一条（IF/ADL）进队列。验证 raft 回流路径最终与单节点同一结果（借款人被强平、全局守恒）。
     #[test]
     fn cluster_mode_cascade_completes_across_rounds_conserves() {
         use std::cell::RefCell;
@@ -1331,14 +1243,13 @@ mod snapshot_tests {
 
     #[test]
     fn snapshot_roundtrip_preserves_replicated_state_and_rebuilds_non_replicated() {
-        // 共享内存后端:core persist → fresh restored recover(模拟 failover 跨实例)。
+
         let shared = InMemorySerializationProcessor::new();
         let mut core = build_rich_core(Box::new(shared.clone()));
         assert!(core.persist(1, 0));
         let mut restored = ExchangeCore::new(); restored.with_serialization_processor(Box::new(shared.clone()));
         restored.recover(1, 0);
 
-        // 字节相等:restored 重新 persist 到快照 2,与快照 1 的两模块 payload 逐字节比对。
         assert!(restored.persist(2, 0));
         let m_re = SerializedModuleType::RiskEngine;
         let m_me = SerializedModuleType::MatchingEngineRouter;

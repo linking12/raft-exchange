@@ -1,6 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITExtraMarginIntegration`
-// 验证逐仓/全仓追加保证金（extra margin）的记账、平仓退还、以及强平预警场景下的保证金/清算价/保证金率联动。
+
 mod tests {
     use std::collections::BTreeMap;
 
@@ -147,7 +146,6 @@ mod tests {
         }
     }
 
-    // 对应 Java testExtraMarin4Cross：全仓下追加保证金应正确记入账户余额
     #[test]
     fn extra_margin_cross_credits_account() {
         let deposit1 = 2_000i64;
@@ -175,7 +173,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testExtraMarin4Isolated：逐仓追加保证金要求存在匹配仓位，仓位不存在/模式不匹配时报错
     #[test]
     fn extra_margin_isolated_requires_matching_position() {
         let deposit1 = 2_000i64;
@@ -221,7 +218,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testIsolatedClosePosition：逐仓平仓后应退还 extra_margin
     #[test]
     fn isolated_close_position_refunds_extra_margin() {
         let deposit = 1_000i64;
@@ -269,7 +265,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java tesMultipleExtraMargin：同一用户多个逐仓仓位的 extra_margin 应相互独立
     #[test]
     fn multiple_extra_margin_are_independent_per_position() {
         let deposit = 10_000i64;
@@ -334,7 +329,6 @@ mod tests {
             .expect("position report entry should exist")
     }
 
-    // 对应 Java testInactiveUser：挂起（inactive）用户不允许追加保证金
     #[test]
     fn inactive_user_cannot_adjust_margin() {
         let deposit = 10_000i64;
@@ -366,7 +360,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java testIsolatedMarginLiquidationWarning：逐仓强平预警不应改动账户/仓位，追加保证金足够时应推高清算价距离
     #[test]
     fn isolated_margin_liquidation_warning() {
         let deposit = 10_000i64;
@@ -422,7 +415,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java testIsolatedMarginLiquidationWarning2：逐仓预警后追加保证金不足时仍不应触发强平
     #[test]
     fn isolated_margin_liquidation_warning_insufficient_topup() {
         let deposit = 10_000i64;
@@ -468,7 +460,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java testCrossMarginLiquidationWarning：全仓强平预警不触发强平，追加保证金后清算价/保证金率应相应改善
     #[test]
     fn cross_margin_liquidation_warning() {
         let deposit = 10_000i64;
@@ -523,7 +514,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java testCrossMarginLiquidationWarning2：全仓预警下连续两次追加保证金，验证每次清算价/保证金率的更新
     #[test]
     fn cross_margin_liquidation_warning_insufficient_topup() {
         let deposit = 10_000i64;
@@ -576,7 +566,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java testIsolatedMarginLiquidation2：逐仓双腿同时被强平后应各自退还 extra_margin
     #[test]
     fn isolated_margin_liquidation_both_legs() {
         let deposit = 10_000i64;

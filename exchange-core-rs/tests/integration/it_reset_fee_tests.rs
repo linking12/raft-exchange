@@ -1,5 +1,3 @@
-//! 移植自 Java 测试类 ITResetFee.java：验证 RESET_FEE 命令把 fees bucket 清零并把额度转入 adjustments，
-//! 同时对单币种发出一份聚合后的 ResetFee FundEvent；空 fees 时应保持幂等、不产生事件。
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -44,13 +42,10 @@ mod tests {
         api
     }
 
-    // 提交 RESET_FEE 命令（order_id 无实际语义，仅作占位）。
     fn reset_fee(api: &mut ExchangeApi) -> CommandResultCode {
         api.submit(OrderCommand { command: OrderCommandType::ResetFee, order_id: 999, ..Default::default() })
     }
 
-    // 对应 Java resetFee_spot_aggregatesAndClears()：撮合产生 fees 后 RESET_FEE 应清零 fees[QUOTE]、
-    // 把额度转入 adjustments，并对该币种发出恰好 1 条聚合后的 ResetFee FundEvent（字段准确）。
     #[test]
     fn reset_fee_aggregates_and_clears() {
         let mut api = setup();
@@ -77,8 +72,6 @@ mod tests {
         assert_eq!(ev.order_id, SYSTEM_TRIGGERED_ORDER_ID);
     }
 
-    // 对应 Java resetFee_empty_noEventsAndIdempotent()：fees 为空时 RESET_FEE 不应发出任何 ResetFee 事件，
-    // 且连续调用两次仍保持幂等（结果都是 Success，全局守恒不变）。
     #[test]
     fn reset_fee_empty_no_events_idempotent() {
         let mut api = setup();

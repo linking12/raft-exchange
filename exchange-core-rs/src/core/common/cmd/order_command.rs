@@ -1,4 +1,3 @@
-//! 对应 Java `exchange.core2.core.common.cmd.OrderCommand`。
 use std::collections::BTreeMap;
 
 use crate::core::common::adl_user_position::AdlUserPosition;
@@ -11,14 +10,8 @@ use crate::core::common::matcher_trade_event::MatcherTradeEvent;
 use crate::core::common::l2_market_data::L2MarketData;
 use crate::core::common::fund_event::FundEvent;
 
-/// 对应 Java `OrderCommand.FLAG_REDUCE_ONLY`：`order_flags` 位标记，仅在 PLACE_ORDER 中表示只减仓。
 pub const FLAG_REDUCE_ONLY: i32 = 1;
 
-/// 单条命令的载体，贯穿 R1（risk 引擎）/撮合/R2 全流程复用同一份数据；对应 Java `OrderCommand` 类。
-/// Java 版按 shardId 用数组区分各 RiskEngine 分片写入（`makerFundEventsByShard`/
-/// `adlUserPositionsByShard`/`ifPreviewCoverByShard`/`fundingPaymentAndRecvNotionalByShard`
-/// 等，构造时按 numShards 预分配以消除 R1 并行 lazy-init 竞态），
-/// Rust 版这里以单一 `Vec`/`Option` 字段（`fund_events`/`adl_user_positions`/`adl_events` 等）承载。
 #[derive(Debug, Clone, Default)]
 pub struct OrderCommand {
     pub command: OrderCommandType,
@@ -51,7 +44,7 @@ pub struct OrderCommand {
 }
 
 impl OrderCommand {
-    /// 对应 Java `OrderCommand.isReduceOnly()`。
+
     pub fn is_reduce_only(&self) -> bool {
         (self.order_flags & FLAG_REDUCE_ONLY) != 0
     }

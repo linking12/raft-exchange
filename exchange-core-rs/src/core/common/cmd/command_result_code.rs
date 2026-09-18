@@ -1,12 +1,3 @@
-//! 对应 Java `exchange.core2.core.common.cmd.CommandResultCode`。
-//! 只搬运 Rust 引擎实际会产生的结果码子集：Java 侧网关/框架专用码
-//! （`NEW`/`ACCEPTED`/`AUTH_TOKEN_EXPIRED`/`DROP`/`BINARY_COMMAND_FAILED`/
-//! `REPORT_QUERY_UNKNOWN_TYPE`、`STATE_PERSIST_*`/`STATE_RECOVER_*` 状态持久化码）未搬。
-
-/// 命令执行结果码。`code()` 对应 Java `CommandResultCode.getCode()`（lombok `@Getter` 生成）。
-/// 正值=成功/中间态（`ValidForMatchingEngine`=1、`Success`=100），负值按子域分段编码：
-/// -1xxx 鉴权/symbol、-2xxx 风控/期货保证金、-3xxx 撮合、-4xxx 用户/账户、
-/// -5xxx symbol 管理、-6xxx 现货借贷 loan（详见 loan.md §8.1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandResultCode {
     ValidForMatchingEngine,
@@ -19,17 +10,17 @@ pub enum CommandResultCode {
     RiskAskPriceLowerThanFee,
     RiskMarginTradingDisabled,
     RiskInvalidAmount,
-    /// 杠杆倍率非法，不在 symbol 支持的范围内。
+
     RiskInvalidLeverage,
-    /// 新杠杆与当前仓位的杠杆不匹配。
+
     RiskLeverageMismatch,
-    /// 仓位模式（Isolated/Cross）不匹配。
+
     RiskMarginModeMismatch,
-    /// 仓位不存在。
+
     RiskMarginPositionNotExists,
-    /// 标记价格不存在。
+
     RiskMarkpriceNotAvailable,
-    /// `IF_WITHDRAW` 时保险基金 available 不足以覆盖。
+
     RiskIfInsufficient,
     MatchingUnknownOrderId,
     MatchingUnsupportedCommand,
@@ -41,60 +32,56 @@ pub enum CommandResultCode {
     UserMgmtAccountBalanceAdjustmentNsf,
     SymbolMgmtSymbolAlreadyExists,
 
-    /// 内部转账 from == to 自转。
     InternalTransferInvalidSelf,
 
-    /// `spec.loanConfig.initialLtvBps == 0`。
     LoanNotEnabled,
-    /// loanId 已存在（Isolated / Cross 命名空间独立）。
+
     LoanAlreadyExists,
-    /// loanId 不存在。
+
     LoanNotFound,
-    /// loan.uid ≠ cmd.uid。
+
     LoanUidMismatch,
-    /// userStatus == SUSPEND 后拒绝所有 LOAN_* 命令。
+
     LoanUserSuspended,
-    /// amount ≤ 0。
+
     LoanInvalidAmount,
-    /// principal > spec.loanConfig.maxAmount。
+
     LoanPrincipalExceedsLimit,
-    /// markPrice 缺失或 0。
+
     LoanMarkpriceNotReady,
-    /// 开仓 LTV 超线（LOAN_CREATE Isolated）。
+
     LoanLtvTooHigh,
-    /// Cross 借后账户级 LTV 超线（LOAN_CROSS_BORROW）。
+
     LoanLtvTooHighAfterBorrow,
-    /// 减 Isolated 抵押后 LTV 超线。
+
     LoanLtvTooHighAfterRelease,
-    /// 撤 Cross 抵押后账户级 LTV 超线。
+
     LoanCrossLtvTooHighAfterWithdraw,
-    /// accounts − calculateLocked 不足以覆盖新抵押量。
+
     LoanCollateralInsufficient,
-    /// currencySpec.collateralWeightBps == 0（Cross 抵押白名单）。
+
     LoanCollateralNotAllowed,
-    /// 减 Isolated 抵押量 > loan.collateralAmount。
+
     LoanCollateralExceedsLoan,
-    /// 还款时 accounts − calculateLocked < 应还金额。
+
     LoanAccountInsufficient,
-    /// 池子不够 / POOL_WITHDRAW 抽资超。
+
     LoanPoolInsufficient,
-    /// 借出后池子利用率超 loanPoolUtilizationCapBps。
+
     LoanPoolUtilizationExceeded,
-    /// POOL_DEPOSIT/WITHDRAW 参数级路由错（cmd.uid ∉ [0, N)）。
+
     LoanPoolWrongShard,
-    /// LOAN_IF_WITHDRAW 提取超过 LIF 该币种余额。
+
     LoanIfInsufficient,
-    /// 阈值序 / 范围违规（initial 应 < liquidation < 10000 等）。
+
     LoanInvalidConfig,
-    /// 试图给非-CURRENCY_EXCHANGE_PAIR（期货/交割）配置 loan。
+
     LoanInvalidSymbolType,
-    /// Cross BORROW / WITHDRAW fail-close：numeraireCurrency 未配置。
+
     LoanNumeraireNotConfigured,
-    /// reserved：force-sell 已实装后暂无 caller。
+
     LoanNotImplemented,
 
-    /// 仓位已存在（对应 Java `RISK_MARGIN_POSITION_EXISTS`，Java 声明在 -2010，
-    /// 与 `RiskMarginPositionNotExists` 相邻；此处仅枚举声明顺序不同，code 值一致）。
     RiskMarginPositionExists,
     UserMgmtUserNotSuspendableHasPositions,
     UserMgmtUserNotSuspendableNonEmptyAccounts,

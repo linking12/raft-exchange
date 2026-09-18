@@ -1,6 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITFutureCross`（继承 `ITFutureBase`）
-// 验证期货 cross/isolated 保证金模式切换、cross 全仓提现校验、开平仓损益结算与 cross 全仓强平/预警场景
+
 mod tests {
     use std::collections::BTreeMap;
 
@@ -167,7 +166,6 @@ mod tests {
         }
     }
 
-    // 对应 Java testCancelSuccess：isolated/cross 保证金模式不能混用，撤单后可切换模式重新挂单
     #[test]
     fn cancel_success_margin_mode_mismatch_guard() {
         let deposit = 2_000;
@@ -206,7 +204,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testDefaultMargin：不指定 margin mode 时默认为 ISOLATED
     #[test]
     fn default_margin_is_isolated() {
         let deposit = 20_000;
@@ -217,7 +214,6 @@ mod tests {
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().margin_mode, MarginMode::Isolated);
     }
 
-    // 对应 Java tesCloseMarginThenChangeMode：仓位全平后允许更改保证金模式
     #[test]
     fn close_margin_then_change_mode() {
         let mut api = setup_single();
@@ -237,7 +233,6 @@ mod tests {
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().margin_mode, MarginMode::Isolated);
     }
 
-    // 对应 Java testPendingAvgPrice：验证 pendingBuyAvgPrice/pendingSellAvgPrice 的加权均价计算
     #[test]
     fn pending_avg_price() {
         let price1 = 10_000;
@@ -258,7 +253,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testCrossMarginWithdraw：cross 保证金提现须扣除该币种下所有期货持仓占用的保证金（空仓场景）
     #[test]
     fn cross_margin_withdraw() {
         let deposit = 10_000;
@@ -282,7 +276,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testCrossMarginWithdraw2：cross 保证金提现须扣除该币种下所有期货持仓占用的保证金（持仓场景）
     #[test]
     fn cross_margin_withdraw2() {
         let deposit = 10_000;
@@ -317,7 +310,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenPosition4Bid：maker Bid + taker Ask 全部成交开仓，验证方向与手续费扣减
     #[test]
     fn open_position_taker_ask() {
         let deposit = 1_000;
@@ -335,7 +327,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenPosition4Ask：maker Ask + taker Bid 全部成交开仓，验证方向与手续费扣减
     #[test]
     fn open_position_taker_bid() {
         let deposit = 1_000;
@@ -353,7 +344,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenMultiplePosition4Bid：maker Bid 挂大单，taker Ask 部分成交，验证剩余挂量与已开仓量
     #[test]
     fn open_multiple_partial_taker_ask() {
         let size = 10;
@@ -373,7 +363,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenMultiplePosition4Ask：maker Ask 挂大单，taker Bid 部分成交，验证剩余挂量与已开仓量
     #[test]
     fn open_multiple_partial_taker_bid() {
         let size = 10;
@@ -393,7 +382,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testClosePosition：反向单全平仓位，已实现盈亏结算入账户
     #[test]
     fn close_full_position_settles_pnl() {
         let deposit = 1_000;
@@ -414,7 +402,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPartialClosePosition：反向单部分平仓，盈亏递延不立即计入 profit
     #[test]
     fn partial_close_position_defers_pnl() {
         let deposit = 10_000;
@@ -439,7 +426,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testCrossMarginLiquidation（简化版）：cross 全仓强平触发后，总持仓量应减少
     #[test]
     fn cross_margin_liquidation_reduces_positions() {
         let mut api = setup_two();
@@ -467,7 +453,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java testCrossMarginLiquidationWarning：亏损触发保证金预警但未达强平线，账户/仓位不变，校验 upnl/强平价/保证金率
     #[test]
     fn cross_margin_liquidation_warning_no_liquidation() {
         let deposit = 10_000i64;

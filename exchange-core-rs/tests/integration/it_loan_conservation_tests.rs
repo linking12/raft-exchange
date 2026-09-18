@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
-    // 翻译自 Java `ITLoanConservation`
-    // 验证非恒等 scale（WBTC currency_scale_k=100）下 loan 强平/还款各路径的全局资金守恒（含跨币种 loan 平台桶）
+
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
     use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
@@ -143,7 +142,6 @@ mod tests {
         assert!(core.query_total_balance().is_global_zero(), "global conservation broken @ {whence} -- loan platform bucket is included in reconciliation");
     }
 
-    // 搭建整套测试夹具：WBTC(scale_k=100，非恒等)/USDT 现货对 + loan_config + 资金池预存 + BORROWER/LP 初始余额
     fn boot() -> ExchangeCore {
         let mut core = ExchangeCore::new();
         core.ssp.add_currency(CoreCurrencySpecification { currency: WBTC, currency_scale_k: 100, collateral_weight_bps: 10_000, ..Default::default() });
@@ -180,7 +178,6 @@ mod tests {
         assert_eq!(rc, CommandResultCode::Success);
     }
 
-    // 对应 Java fullLiquidation_nonIdentityScale_conserves：抵押品全部被强平卖出后校验守恒
     #[test]
     fn full_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
@@ -203,7 +200,6 @@ mod tests {
         assert_conserved(&core, "after full liquidation");
     }
 
-    // 对应 Java partialFillLiquidation_nonIdentityScale_conserves：流动性只够部分成交，仅卖出部分抵押品后校验守恒
     #[test]
     fn partial_fill_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
@@ -221,7 +217,6 @@ mod tests {
         assert_conserved(&core, "after partial-fill liquidation");
     }
 
-    // 对应 Java repay_nonIdentityScale_conserves：全额还款后校验守恒
     #[test]
     fn repay_non_identity_scale_conserves() {
         let mut core = boot();
@@ -235,7 +230,6 @@ mod tests {
         assert_conserved(&core, "after full repay");
     }
 
-    // 对应 Java resetFee_doesNotSweepInsuranceFund_conserves：RESET_FEE 不得清空 loan 保险基金（准备金非收入），且不影响守恒
     #[test]
     fn reset_fee_does_not_sweep_insurance_fund_conserves() {
         let mut core = boot();
@@ -263,7 +257,6 @@ mod tests {
         assert_eq!(rc, CommandResultCode::Success);
     }
 
-    // 对应 Java crossFullLiquidation_nonIdentityScale_conserves：cross 借贷抵押品全部被强平卖出后校验守恒
     #[test]
     fn cross_full_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
@@ -283,7 +276,6 @@ mod tests {
         assert_conserved(&core, "after cross full liquidation");
     }
 
-    // 对应 Java crossUnderwaterLiquidation_nonIdentityScale_conserves：抵押品跌破本金（underwater）时强平，借款人本金不返还，仍需守恒
     #[test]
     fn cross_underwater_liquidation_non_identity_scale_conserves() {
         let mut core = boot();
@@ -300,7 +292,6 @@ mod tests {
         assert_conserved(&core, "after cross underwater liquidation");
     }
 
-    // 对应 Java crossWithdrawAndRepay_nonIdentityScale_conserves：cross 借贷下先提取部分抵押品再全额还款，验证两步都守恒
     #[test]
     fn cross_withdraw_and_repay_non_identity_scale_conserves() {
         let mut core = boot();
@@ -314,7 +305,6 @@ mod tests {
         assert_conserved(&core, "after cross full repay");
     }
 
-    // 对应 Java duplicateForceLiquidate_secondRejectedByGuard_conserves：同一笔 loan 重复发起强平，第二次应被 guard 拒绝且状态不变
     #[test]
     fn duplicate_force_liquidate_second_rejected_by_guard_conserves() {
         let mut core = boot();

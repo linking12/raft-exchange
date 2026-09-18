@@ -1,11 +1,3 @@
-//! Java↔Rust 黄金向量对拍框架(以 Java 为 oracle)。
-//!
-//! 本文件没有对应的单个 Java 测试类,而是与
-//! `exchange-core/src/test/java/exchange/core2/tests/conformance/ConformanceExporter.java`
-//! 配套的 Rust 侧回放器:读取 `tests/conformance_vectors/*.stream` 文本 DSL 脚本,
-//! 在 Rust 引擎上重放同一套命令序列,并将结果(命令返回码 + 账户/仓位/手续费状态
-//! + 资金事件)与 Java `ConformanceExporter` 预先生成的 `*.golden` 文件逐行对拍,
-//! 验证两侧引擎行为完全一致。
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -22,7 +14,6 @@ use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecifi
 use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::exchange_api::{ExchangeApi, MarginAdjustmentRequest, PlaceFuturesOrderRequest, PlaceOrderRequest};
 
-// 解析向量文件的一行 DSL:首个 token 是命令 verb,其余 `key=value` token 收集为键值表;空行/`#` 注释行跳过。
 fn parse_line(line: &str) -> Option<(String, BTreeMap<String, String>)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -83,7 +74,6 @@ fn margin_of(s: Option<&str>) -> MarginMode {
     if s == Some("CROSS") { MarginMode::Cross } else { MarginMode::Isolated }
 }
 
-// golden 输出只收录这些资金事件类型(与 Java ConformanceExporter 收录的类型集合对齐)。
 fn fe_allowed(t: FundEventType) -> bool {
     use FundEventType::*;
     matches!(
@@ -107,7 +97,6 @@ fn fe_allowed(t: FundEventType) -> bool {
     )
 }
 
-// 将一条资金事件格式化为 golden 文件里的一行文本。
 fn fe_line(e: &FundEvent) -> Option<String> {
     if !fe_allowed(e.event_type) {
         return None;
@@ -122,11 +111,8 @@ fn fe_line(e: &FundEvent) -> Option<String> {
     ))
 }
 
-// 核心回放器:逐行解析 DSL 命令,依次提交给 Rust 引擎,记录每条命令的返回码
-// 和沿途产生的资金事件,返回最终引擎状态 + 结果行 + 排序后的事件行。
 fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
-    // results_consumer 收集器（= Java resultsConsumer）：主命令 + 每条级联子命令处理完各触发一次，
-    // 逐命令累积其 fund events。装在 ExchangeCore 上（resultsConsumer 是 core 的事），再用 from_core 包成门面。
+
     let collected: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let sink = collected.clone();
@@ -394,7 +380,6 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>) {
     (api, results, fund_lines)
 }
 
-// 把回放结束后的引擎状态(非零余额、非零仓位、非零手续费)序列化成确定顺序的文本行,供 golden 对拍。
 fn state_digest(api: &ExchangeApi) -> Vec<String> {
     let mut out = Vec::new();
     let mut uids: Vec<i64> = api.ups().users.keys().copied().collect();
@@ -438,12 +423,10 @@ fn state_digest(api: &ExchangeApi) -> Vec<String> {
     out
 }
 
-// 向量文件里的 `#!events=off` 指令可关闭事件行对拍(部分向量不关心事件顺序)。
 fn events_enabled(stream: &str) -> bool {
     !stream.lines().any(|l| l.trim_start_matches('#').trim() == "!events=off")
 }
 
-// 拼出与 Java golden 文件同格式的完整输出:命令结果行 + STATE 状态段 + (可选)EVENTS 事件段。
 fn rust_output(stream: &str) -> String {
     let (api, results, fund_lines) = replay(stream);
     let mut lines = results;
@@ -456,7 +439,6 @@ fn rust_output(stream: &str) -> String {
     lines.join("\n") + "\n"
 }
 
-// 遍历 tests/conformance_vectors/*.stream,对每个向量回放并与同名 .golden 逐行比对。
 #[test]
 fn conformance_golden_vectors() {
     let dir = std::env::var("CONFORMANCE_VECTORS_DIR")

@@ -1,7 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITFeeAuditRegression`
-// 锁定 audit 报告 H1/H2 两处 fee 多扣 bug 的回归测试：H1 动态费率强平 fee 被 takerSize 倍放大；
-// H2 FOK_BUDGET 实际成交量低于预算时仍按预算估算 taker fee，导致差额蒸发
+
 mod tests {
     use std::collections::BTreeMap;
 
@@ -53,7 +51,6 @@ mod tests {
         })
     }
 
-    // 对应 Java h1_liquidationFeeDynamicRate_notAmplifiedByTakerSize：验证动态费率下强平手续费不会被 taker 成交量倍数放大
     #[test]
     fn h1_liquidation_fee_dynamic_rate_not_amplified_by_taker_size() {
         const BASE_ID: i32 = 999;
@@ -107,7 +104,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java h2_fokBudgetActualMatchedBelowBudget_refundsFeeDelta：验证 FOK_BUDGET 实际成交量低于预算时按实际成交均价算 fee，差额不蒸发
     #[test]
     fn h2_fok_budget_actual_matched_below_budget_refunds_fee_delta() {
         const BASE_ID: i32 = 998;
