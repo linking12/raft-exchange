@@ -2126,6 +2126,7 @@ impl RiskEngine {
         };
         let key = profile.create_positions_key(cmd.symbol, action, cmd.command);
         let Some(position) = profile.positions.get(&key) else {
+            cmd.size = 0;
             return CommandResultCode::Success;
         };
         cmd.size = cmd.size.min(position.open_volume);
