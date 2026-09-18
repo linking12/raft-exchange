@@ -25,7 +25,6 @@ pub struct ExchangeCore {
     ser_proc: Box<dyn SerializationProcessor>,
     results_consumer: Option<ResultsConsumer>,
     results_seq: i64,
-
     liquidation_scheduler: LiquidationScheduler,
 }
 
