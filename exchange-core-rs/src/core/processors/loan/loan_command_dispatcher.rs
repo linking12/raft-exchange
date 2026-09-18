@@ -504,6 +504,7 @@ impl LoanCommandDispatcher {
         if lif_takeover || (principal == 0 && interest == 0 && collateral == 0) {
             taker_up.isolated_loans.remove(&loan_id);
         }
+        engine.liquidation_engine.loan_liquidation_engine.on_isolated_loan_closed(taker_up, spec.symbol_id);
     }
 
     /// 对应 Java `handleLoanCrossAddCollateral`：账户级 Cross 追加抵押。symbol=currency / size=amount；
@@ -838,6 +839,7 @@ impl LoanCommandDispatcher {
         if all_collateral_exhausted {
             Self::take_over_remaining_cross_loans(engine, cmd, taker_up, cmd.timestamp, target_loan_id, ssp);
         }
+        engine.liquidation_engine.loan_liquidation_engine.sync_cross_exposure(taker_up);
     }
 
     /// 对应 Java `handlePoolDeposit`：运营方注入借贷池流动性。symbol=currency / size=amount。

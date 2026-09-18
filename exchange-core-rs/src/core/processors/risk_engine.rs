@@ -233,10 +233,8 @@ impl RiskEngine {
 
     /// 对应 Java `RiskEngine.closePositionRiskCheck`：CLOSE_POSITION 的 R1 校验。取已有同方向仓位，按
     /// [`Self::max_closable_size`] 把 `cmd.size` 收敛到可平量，沿用该仓位的 `leverage`/`margin_mode`，
-    /// 再 `pending_hold` 占用。无仓位或可平量 ≤ 0 时直接 `Success`（不下单也不报错，语义同 Java）。
-    /// 与 Java 的差异：Java 版这里还发 `sendLockPendingEvent`（携带 free/locked 快照）；本方法未见
-    /// 对应事件推送，调用方需自行确认事件是否在别处（如 `pre_process_command` 的 PLACE_ORDER 分支同款
-    /// 逻辑）补齐。
+    /// 再 `pending_hold` 占用并发 `LockPending` 事件（对应 Java `sendLockPendingEvent`）。无仓位或可平量
+    /// ≤ 0 时直接 `Success`（不下单也不报错，语义同 Java）。
     pub fn close_position_risk_check(
         &mut self,
         cmd: &mut OrderCommand,
@@ -273,6 +271,22 @@ impl RiskEngine {
         cmd.margin_mode = position.margin_mode;
 
         position.pending_hold(action, cmd.size, cmd.price);
+
+        let oid = cmd.order_id;
+        if let Some(up) = ups.get(cmd.uid) {
+            if let Some(pos) = up.positions.get(&position_key) {
+                Self::push_futures_event(
+                    &mut cmd.fund_events,
+                    &self.last_price_cache,
+                    FundEventType::LockPending,
+                    oid,
+                    pos,
+                    spec,
+                    up,
+                    ssp,
+                );
+            }
+        }
         CommandResultCode::ValidForMatchingEngine
     }
 

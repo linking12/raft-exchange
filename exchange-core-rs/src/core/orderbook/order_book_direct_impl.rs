@@ -347,7 +347,7 @@ impl OrderBookDirectImpl {
         let reserve_bid_price = cmd.reserve_bid_price;
 
         let (filled_size, filled_notional) =
-            self.try_match_instantly(action, size, reserve_bid_price, Some(price), cmd);
+            self.try_match_instantly(action, size, reserve_bid_price, Some(price), 0, 0, cmd);
 
         if filled_size == size {
             return;
@@ -395,6 +395,8 @@ impl OrderBookDirectImpl {
         taker_size: i64,
         taker_reserve_bid_price: i64,
         limit_price: Option<i64>,
+        taker_prior_filled: i64,
+        taker_prior_filled_notional: i64,
         cmd: &mut OrderCommand,
     ) -> (i64, i64) {
         let is_bid = taker_action == OrderAction::Bid;
@@ -492,8 +494,8 @@ impl OrderBookDirectImpl {
                 bidder_hold_price,
                 matched_order_uid: m_uid,
                 matched_order_command_type: m_command,
-                filled: taker_filled,
-                filled_notional: taker_filled_notional,
+                filled: add_exact(taker_prior_filled, taker_filled),
+                filled_notional: add_exact(taker_prior_filled_notional, taker_filled_notional),
                 matched_order_size: m_size,
                 matched_order_price: m_price,
                 matched_order_type: m_order_type,
@@ -577,7 +579,7 @@ impl OrderBookDirectImpl {
         let size = cmd.size;
         let reserve_bid_price = cmd.reserve_bid_price;
 
-        let (filled, _) = self.try_match_instantly(action, size, reserve_bid_price, Some(price), cmd);
+        let (filled, _) = self.try_match_instantly(action, size, reserve_bid_price, Some(price), 0, 0, cmd);
         let rejected_size = size - filled;
         if rejected_size != 0 {
             Self::attach_reject_event(cmd, rejected_size);
@@ -618,7 +620,7 @@ impl OrderBookDirectImpl {
         let reserve_bid_price = cmd.reserve_bid_price;
 
         if self.available_volume_for_match(action, price, size) >= size {
-            self.try_match_instantly(action, size, reserve_bid_price, Some(price), cmd);
+            self.try_match_instantly(action, size, reserve_bid_price, Some(price), 0, 0, cmd);
         } else {
             Self::attach_reject_event(cmd, size);
         }
@@ -636,7 +638,7 @@ impl OrderBookDirectImpl {
         let budget = self.check_budget_to_fill(action, size);
 
         if Self::is_budget_limit_satisfied(action, budget, limit) {
-            self.try_match_instantly(action, size, reserve_bid_price, None, cmd);
+            self.try_match_instantly(action, size, reserve_bid_price, None, 0, 0, cmd);
         } else {
             Self::attach_reject_event(cmd, size);
         }
@@ -724,7 +726,7 @@ impl OrderBookDirectImpl {
             remaining -= trade_size;
             remaining_budget = sub_exact(remaining_budget, mul_exact(trade_size, trade_price));
             batch_remaining -= trade_size;
-            let active_order_completed = batch_remaining == 0;
+            let active_order_completed = remaining == 0;
 
             events.push(MatcherTradeEvent {
                 event_type: MatcherEventType::Trade,
@@ -1265,7 +1267,7 @@ impl IOrderBook for OrderBookDirectImpl {
         let remaining = existing_size - existing_filled;
 
         let (matched_now, matched_notional_now) =
-            self.try_match_instantly(action, remaining, reserve_bid_price, Some(new_price), cmd);
+            self.try_match_instantly(action, remaining, reserve_bid_price, Some(new_price), existing_filled, existing_filled_notional, cmd);
 
         let total_filled = existing_filled + matched_now;
 
@@ -2254,6 +2256,7 @@ mod tests {
         let trade = head.next.as_ref().expect("expected a trade event after the reject");
         assert_eq!(trade.event_type, MatcherEventType::Trade);
         assert_eq!(trade.size, 2);
+        assert!(!trade.active_order_completed, "active_order_completed 用全局 remaining（8 未成交待 REJECT），对齐 Java DirectImpl");
         assert!(trade.next.is_none());
 
         assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
@@ -2344,6 +2347,7 @@ mod tests {
         assert_eq!(trade.maker_order_id, 1);
         assert_eq!(trade.size, 2);
         assert!(trade.maker_order_completed);
+        assert!(!trade.active_order_completed, "active_order_completed 用全局 remaining（8 未成交待 REJECT），对齐 Java DirectImpl");
         assert!(trade.next.is_none(), "order2 should not be touched");
 
         assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
@@ -2383,14 +2387,14 @@ mod tests {
         assert_eq!(trade1.price, 100);
         assert_eq!(trade1.size, 3);
         assert!(trade1.maker_order_completed, "the only 3 units at price 100 are fully filled");
-        assert!(!trade1.active_order_completed, "batch cap (10) not exhausted -- this price level simply ran out of supply");
+        assert!(!trade1.active_order_completed, "全局 remaining=7 未清");
 
         let trade2 = trade1.next.as_ref().expect("expected the second trade(@200)");
         assert_eq!(trade2.event_type, MatcherEventType::Trade);
         assert_eq!(trade2.price, 200);
         assert_eq!(trade2.size, 3, "after crossing buckets must recompute as 700(remaining budget)/200=3, not carry over the old batch's 7");
         assert!(!trade2.maker_order_completed, "the 100-unit resting order was only filled 3");
-        assert!(trade2.active_order_completed, "the new batch cap (3) at price 200 is exactly exhausted");
+        assert!(!trade2.active_order_completed, "active_order_completed 用全局 remaining（4 未成交待 REJECT），对齐 Java DirectImpl");
         assert!(trade2.next.is_none());
 
         assert_eq!(direct.fill_l2(10), naive.fill_l2(10));
