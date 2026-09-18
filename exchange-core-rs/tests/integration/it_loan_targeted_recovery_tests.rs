@@ -1,8 +1,3 @@
-//! Ported from the Java test class `ITLoanTargetedRecovery.java`. Verifies that the loan
-//! targeted liquidation index still works after snapshot recovery: build state, snapshot it,
-//! restore into a fresh `ExchangeCore` instance (rebuilding the isolated/cross loan indices
-//! from the recovered user state), then confirm a mark-price crash alone (no
-//! `LIQUIDATION_SCAN`) still force-liquidates the loan through the targeted path.
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -92,12 +87,9 @@ mod tests {
         OrderCommand { command: OrderCommandType::MarkpriceAdjustment, symbol, price, timestamp: ts, ..Default::default() }
     }
 
-    // Corresponds to Java loanIndex_rebuildsAfterSnapshotRecovery_targetedStillTriggersForceSell():
-    // build a loan on the original instance, snapshot it, restore into a fresh instance, then
-    // check the targeted loan-liquidation index was rebuilt and still fires on a mark-price crash.
     #[test]
     fn loan_index_rebuilds_after_snapshot_recovery_targeted_still_triggers_force_sell() {
-        // 共享内存后端:build+persist(leader)→ recover(follower/fresh core),模拟 failover。
+
         let shared = InMemorySerializationProcessor::new();
         {
             let mut core = ExchangeCore::new(); core.with_serialization_processor(Box::new(shared.clone()));

@@ -1,6 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITLoanDisableSymbol`
-// 验证停借（ADD_LOAN 把 initialLtvBps 置 0）只关闭新开仓入口，不得连带影响/强平存量贷款。
+
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
     use exchange_core_rs::core::common::batch_add_loan_command::{BatchAddLoanCommand, SymbolLoanConfig, UNSET, UNSET_AMOUNT};
@@ -84,8 +83,6 @@ mod tests {
         }
     }
 
-    // 对应 Java disableSymbol_blocksNewLoans_butKeepsExistingUnliquidated：停借后拒绝新贷款，但存量贷款的
-    // liquidation/margin-call LTV 及抵押物保持不变，不会被行情波动误强平
     #[test]
     fn disable_symbol_blocks_new_loans_but_keeps_existing_unliquidated() {
         let mut core = ExchangeCore::new();

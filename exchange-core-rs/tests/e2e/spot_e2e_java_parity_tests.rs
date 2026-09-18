@@ -1,7 +1,3 @@
-//! Rust 自建的现货端到端对拍测试套件。
-//! 未直接对应某个具体 Java 测试类,而是针对 `ExchangeApi` 现货撮合路径
-//! (下单/撤单/改价/减量、IOC/FOK/GTC、风控拒单)逐场景验证余额与冻结
-//! 的变化方向及守恒性,对齐 Java 引擎在这些场景下的预期行为。
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -62,7 +58,6 @@ mod tests {
         user_sum + api.risk().fees.get(&QUOTE).copied().unwrap_or(0)
     }
 
-    // 撮合成交后买卖双方余额应按正确方向变动,且 QUOTE 全局守恒(含手续费池)
     #[test]
     fn match_updates_balances_directionally_and_conserves() {
         let mut api = setup();
@@ -79,7 +74,6 @@ mod tests {
         assert_eq!(total_quote(&api), q_before, "QUOTE should be globally conserved (including fees pool)");
     }
 
-    // 撤单应将挂单时冻结的资金完全释放回可用余额
     #[test]
     fn cancel_restores_locked_funds() {
         let mut api = setup();
@@ -90,7 +84,6 @@ mod tests {
         assert_eq!(locked(&api, BUYER, QUOTE), locked_before, "the lock should be fully released after cancel");
     }
 
-    // 部分成交后撤单,应释放剩余未成交部分对应的冻结
     #[test]
     fn partial_fill_then_cancel_releases_remaining() {
         let mut api = setup();
@@ -102,7 +95,6 @@ mod tests {
         assert!(locked(&api, BUYER, QUOTE) < locked_after_partial, "canceling the remainder should release the lock");
     }
 
-    // IOC 单无对手方成交时,不应改变余额也不应留下任何冻结
     #[test]
     fn ioc_no_counterparty_no_change() {
         let mut api = setup();
@@ -112,7 +104,6 @@ mod tests {
         assert_eq!(locked(&api, BUYER, QUOTE), lk, "an unfilled IOC should not leave any lock");
     }
 
-    // 下单规模超出可用余额应被风控拒绝,返回 RISK_NSF
     #[test]
     fn oversized_order_rejected_risk_nsf() {
         let mut api = setup();
@@ -123,7 +114,6 @@ mod tests {
         );
     }
 
-    // 提现(负向余额调整)应精确减少对应余额
     #[test]
     fn withdraw_decreases_balance() {
         let mut api = setup();
@@ -132,7 +122,6 @@ mod tests {
         assert_eq!(acct(&api, BUYER, QUOTE), before - 1_000, "withdrawal should decrease the balance exactly");
     }
 
-    // 在 reserveBidPrice 范围内改价不应改变冻结;超出该上限改价应被风控拒绝
     #[test]
     fn move_within_reserve_keeps_lock_over_reserve_rejected() {
         let mut api = setup();
@@ -150,7 +139,6 @@ mod tests {
         );
     }
 
-    // 减量应释放对应数量的冻结
     #[test]
     fn reduce_releases_lock() {
         let mut api = setup();
@@ -160,7 +148,6 @@ mod tests {
         assert!(locked(&api, BUYER, QUOTE) < lock_full, "reduce should release the corresponding lock");
     }
 
-    // FOK 单在对手方流动性不足以全额成交时应完全不成交,不动余额也不留冻结
     #[test]
     fn fok_no_full_liquidity_no_fill() {
         let mut api = setup();
@@ -172,7 +159,6 @@ mod tests {
         assert_eq!(locked(&api, BUYER, QUOTE), 0, "an unfilled FOK should not leave any lock");
     }
 
-    // 未成交的 IOC ASK 应完全释放 base 冻结,且不因锁泄漏影响后续同类下单(回归 Java 曾有的泄漏锁误拒问题)
     #[test]
     fn unfilled_ioc_ask_releases_base_lock_no_leak() {
         let mut api = setup();

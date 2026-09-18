@@ -1,16 +1,3 @@
-//! 对应 Java `exchange.core2.core.processors.FundingFeeCommandProcessor`。
-//!
-//! SETTLE_FUNDINGFEES（永续合约资金费率结算）的两步处理器：先扫描该 symbol 下所有活跃用户的仓位，
-//! 按方向分成"付方"（跟触发 `action` 同向，欠资金费）和"收方"（反向，应收资金费）两组，付方按
-//! `rate`（`cmd.price`）算出精确应付金额，收方只记名义价值（`collect`，对应 Java R1 `collectInput`
-//! + matcher stage `buildMatcherEvents` 的合并，其中 `build_matcher_events` 还要按收方名义价值占比
-//! 把总付款额 pro-rata 分给各 shard，余数按 shard id 升序分配，保证跨节点确定性且零和守恒）；
-//! `apply` 先扣付方精确金额，再把该 shard 应收的总额按收方名义价值占比 pro-rata 分给各收方（余数按
-//! uid 升序分配），落到持仓的 `profit` 字段（若 R1→R2 之间仓位已平仓/变向则改记 `accounts`）
-//! （对应 Java R2 `applyEvent`）。Rust 单实例无 shard，故 `build_matcher_events` 接收的 shard 数据切片
-//! 通常只有一个元素，但仍保留切片形态以复刻 Java 的跨 shard pro-rata 分配语义。
-//! HEDGE 持仓模式下同一 symbol 可能同时持有多/空两条腿（`symbol` 与 `-symbol`），两条腿都要单独结算。
-
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -30,30 +17,21 @@ use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::utils::core_arithmetic_utils as arithmetic;
 use crate::core::utils::core_arithmetic_utils::{distribute_remainder_by_one, mul_exact};
 
-/// 用 i128 做加总防中间溢出，再收窄回 i64；溢出（金额天文数字，实际不可能发生）时直接 panic。
 fn sum_i64_checked<'a>(vals: impl Iterator<Item = &'a i64>) -> i64 {
     let s: i128 = vals.map(|&v| v as i128).sum();
     i64::try_from(s).unwrap_or_else(|_| panic!("overflow: funding notional sum {s}"))
 }
 
-/// 对应 Java `exchange.core2.core.common.FundingPaymentAndRecvNotional`：单个 shard 收集到的资金费率
-/// 结算数据——`payer_amounts` 是 uid → 精确应付金额（已按 rate 算好），`receiver_notionals` 是
-/// uid → 持仓名义价值（收方按此值 pro-rata 分账，尚未算出具体金额）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FundingPaymentAndRecvNotional {
     pub payer_amounts: BTreeMap<i64, i64>,
     pub receiver_notionals: BTreeMap<i64, i64>,
 }
 
-/// 无状态标记类型，方法均为纯函数式的 `&self` 调用。
 pub struct FundingFeeCommandProcessor;
 
 impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
-    /// 对应 Java `collectInput`（扫描持仓分付方/收方）+ matcher stage `buildMatcherEvents`（pro-rata 分账）
-    /// 的合并。前置校验：symbol 必须是永续合约、mark price 必须可用、`cmd.size`（rate 的 scale 分母）
-    /// 必须为正。校验通过后把 `(payer_amounts, receiver_notionals, 本 shard 应收总额)` 写入
-    /// `cmd.funding_fee_event`；若没有任何收方分到款项（`build_matcher_events` 返回空），则不写入，
-    /// `apply` 阶段会因此直接跳过整个结算。
+
     fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
         let spec = match ctx.ssp.get_symbol(cmd.symbol) {
             Some(s) if s.symbol_type == SymbolType::FuturesContractPerpetual => s,
@@ -76,10 +54,6 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
         CommandResultCode::Success
     }
 
-    /// 对应 Java R2 `applyEvent`：先按 `payer_amounts` 逐个精确扣付方，再把本 shard 应收总额按
-    /// `receiver_notionals` pro-rata 分给收方（`apply_event` 内部处理），随后为每个涉及本次结算、且
-    /// 仍持有该 symbol 活跃仓位的用户补一条 futures 结算事件；不再持有活跃仓位的（R1→R2 之间已平仓）
-    /// 改发一条 spot 余额快照事件。若 `collect` 未写入 `funding_fee_event`（无收方/无付方），直接跳过。
     fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
         let Some((payer_amounts, receiver_notionals, shard_recv_amount)) = cmd.funding_fee_event.take() else {
             return;
@@ -131,11 +105,7 @@ impl TwoStepCommandProcessor for FundingFeeCommandProcessor {
 }
 
 impl FundingFeeCommandProcessor {
-    /// 对应 Java `collectInput` 内的扫描逻辑：遍历所有 ACTIVE 用户，对该 symbol（ONEWAY 模式）或
-    /// 该 symbol 与 `-symbol` 两条腿（HEDGE 模式）分别处理：方向与触发 `action` 相同的仓位算作付方，
-    /// 精确应付金额 = `notional * rate / rate_scale_k`（`trunc_mul_div`，截断取整），金额为正才记入；
-    /// 方向相反的仓位算作收方，只记原始名义价值（`open_volume * mark_price`），具体应收金额留到
-    /// `build_matcher_events`/`apply_event` 里 pro-rata 分配。`open_volume == 0` 的空仓跳过。
+
     fn collect_input(
         ups: &UserProfileService,
         symbol: i32,
@@ -176,11 +146,6 @@ impl FundingFeeCommandProcessor {
         shard
     }
 
-    /// 对应 Java matcher stage `buildMatcherEvents`：先求跨 shard 的付款总额与收方名义价值总额，
-    /// 任一为零则不产生任何事件（无需结算）；否则按各 shard 收方名义价值占总收方名义价值的比例，把
-    /// 付款总额 pro-rata 分给各 shard（`distribute_remainder_by_one` 内部处理截断产生的余数，按
-    /// shard id 升序分配，保证跨节点确定性）。只跳过既无应收份额、又无付方的 shard；有付方的 shard
-    /// 即使本 shard 应收为 0 也要产出事件（否则该 shard 的付方扣款永远不会在 `apply` 里执行）。
     fn build_matcher_events(shards_data: &[FundingPaymentAndRecvNotional]) -> Vec<(usize, i64)> {
         let total_pay = sum_i64_checked(shards_data.iter().flat_map(|s| s.payer_amounts.values()));
         let total_recv_notional = sum_i64_checked(shards_data.iter().flat_map(|s| s.receiver_notionals.values()));
@@ -208,11 +173,6 @@ impl FundingFeeCommandProcessor {
         events
     }
 
-    /// 对应 Java R2 `applyEvent` 主体：先逐个精确结算付方（`payer_amounts` 里的金额已经算好，直接扣）；
-    /// 再把本 shard 应收总额（`shard_recv_amount`）按收方名义价值 `receiver_notionals` pro-rata 分配
-    /// （`distribute_remainder_by_one` 处理余数，按 uid 升序分配，保证确定性），逐个结算收方；返回
-    /// 实际分给每个收方的金额（用于调用方补发结算事件），跳过分到 0 的收方。
-    /// `shard_recv_amount <= 0` 或收方为空时直接返回空 map，不结算任何收方。
     #[allow(clippy::too_many_arguments)]
     fn apply_event(
         ups: &mut UserProfileService,
@@ -241,13 +201,6 @@ impl FundingFeeCommandProcessor {
         receiver_fees
     }
 
-    /// 对应 Java 私有 `settleFundingFee`：把一笔资金费（付方为负、收方为正）结到单个用户身上。
-    /// 用户不存在或非 ACTIVE 状态直接跳过（R1→R2 之间被注销/挂起）。
-    /// `lookup_symbol` 的选择处理 HEDGE 模式的双腿：先看 `symbol` 上的仓位方向是否与
-    /// `position_side` 一致，一致则用 `symbol`，否则回落到 `-symbol`（多/空两条腿分别记账）。
-    /// 若命中的仓位确实是"活跃仓位"（`open_volume > 0` 且方向匹配），费用记入该仓位的 `profit`
-    /// 字段（后续随平仓结算）；否则说明 R1→R2 之间该仓位已被平掉或方向已变化，改为把费用按
-    /// 币种精度换算后直接记入用户的 `accounts`（钱跟着走，不追着一个可能已不存在的仓位）。
     #[allow(clippy::too_many_arguments)]
     fn settle_funding_fee(
         ups: &mut UserProfileService,

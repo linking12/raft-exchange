@@ -1,5 +1,3 @@
-//! 移植自 Java 测试类 ITSpotTradingFeeCalculationTest.java：验证现货 maker/taker 手续费在 GTC/IOC/FOK_BUDGET/
-//! IOC_BUDGET 各类订单类型、一对多撮合、部分成交等场景下的计算正确性，以及全局资金守恒。
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -71,8 +69,6 @@ mod tests {
         api.ups().users.values().map(|p| p.account(cur)).sum::<i64>() + api.adjustments(cur) + api.fees(cur)
     }
 
-    // 对应 Java testGtcMakerTakerFeeCalculation()：单笔 GTC maker 对单笔 GTC taker，验证 maker/taker
-    // 手续费分别正确计入 fees 池以及双方账户扣费。
     #[test]
     fn gtc_maker_taker_fee_calculation() {
         let mut api = new_api();
@@ -95,7 +91,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testIocTakerFeeCalculation()：GTC maker 对 IOC taker，验证 taker 手续费正确入池。
     #[test]
     fn ioc_taker_fee_calculation() {
         let mut api = new_api();
@@ -111,7 +106,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testFokBudgetTakerFeeCalculation()：FOK_BUDGET 全额成交场景，验证按成交量计费。
     #[test]
     fn fok_budget_taker_fee_calculation() {
         let mut api = new_api();
@@ -129,8 +123,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testIocBudgetFullFillTakerFeeCalculation()：IOC_BUDGET 预算恰好覆盖 size，全额成交，
-    // taker fee 按全量 size×price 计算。
     #[test]
     fn ioc_budget_full_fill_taker_fee_calculation() {
         let mut api = new_api();
@@ -149,8 +141,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testIocBudgetPartialFillTakerFeeCalculation()：IOC_BUDGET 预算不足以覆盖 requested_size，
-    // 部分成交后 fee 必须只按实际成交量计算，不能按请求量计算。
     #[test]
     fn ioc_budget_partial_fill_taker_fee_calculation() {
         let mut api = new_api();
@@ -174,8 +164,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testIocBudgetFullRejectGlobalBalanceReconciliation()：IOC_BUDGET 预算完全不够（任何一手
-    // 都买不起），整单 reject，验证不收取任何 fee 且全局账面闭合。
     #[test]
     fn ioc_budget_full_reject_global_balance_reconciliation() {
         let mut api = new_api();
@@ -193,8 +181,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testMakerOneToManyFeeCalculation()：一个 maker 挂单被多个 taker 分批吃单，验证 fees 按
-    // 已成交总量正确累加。
     #[test]
     fn maker_one_to_many_fee_calculation() {
         let mut api = new_api();
@@ -215,8 +201,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testTakerOneToManyFeeCalculation()：一个 taker 挂单吃掉多个 maker 挂单，验证 fees 按
-    // 已成交总量正确累加。
     #[test]
     fn taker_one_to_many_fee_calculation() {
         let mut api = new_api();
@@ -237,8 +221,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testMixedOrderTypesFeeCalculation()：GTC + IOC 混合订单类型同场景，验证 fees 计算不受
-    // 订单类型混用影响。
     #[test]
     fn mixed_order_types_fee_calculation() {
         let mut api = new_api();
@@ -259,8 +241,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testFeeCalculationParameters()：非整数 size/price 场景，验证 fee 计算使用的是实际成交的
-    // size/price 而非其他参数。
     #[test]
     fn fee_calculation_parameters() {
         let mut api = new_api();
@@ -278,8 +258,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testMakerOneToManyPartialFillFeeConsistency()：maker 挂单大于所有 taker 总量，只被部分
-    // 成交，验证 fees 只按实际成交量计算，maker 挂单余量保留在盘口。
     #[test]
     fn maker_one_to_many_partial_fill_fee_consistency() {
         let mut api = new_api();
@@ -305,8 +283,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testTakerOneToManyPartialFillFeeConsistency()：taker 挂单大于所有 maker 总量，只被部分
-    // 成交，验证 fees 只按实际成交量计算，taker 挂单余量保留在盘口。
     #[test]
     fn taker_one_to_many_partial_fill_fee_consistency() {
         let mut api = new_api();
@@ -332,8 +308,6 @@ mod tests {
         assert_eq!(conserved(&api, QUOTE), 0);
     }
 
-    // 对应 Java testSpotFullLifecycleWithDepositWithdraw()：现货完整生命周期账目守恒——充值→撮合→提现
-    // →对账，对每种 taker OrderType（GTC/IOC/FOK_BUDGET/IOC_BUDGET）各跑一轮，验证全程全局账面闭合。
     #[test]
     fn spot_full_lifecycle_with_deposit_withdraw() {
         for taker_type in [OrderType::Gtc, OrderType::Ioc, OrderType::FokBudget, OrderType::IocBudget] {
@@ -341,7 +315,6 @@ mod tests {
         }
     }
 
-    // 辅助：跑一轮 maker GTC ASK + taker <taker_type> BID 的完整撮合与充提流程，断言各阶段全局守恒。
     fn run_spot_full_lifecycle(taker_type: OrderType) {
         let maker_uid = 7101;
         let taker_uid = 7102;

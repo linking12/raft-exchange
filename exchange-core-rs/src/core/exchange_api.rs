@@ -17,14 +17,6 @@ use crate::core::processors::risk_engine::RiskEngine;
 
 use super::exchange_core::ExchangeCore;
 
-// 对应 Java `ExchangeApi`：Java 版是把 ApiCommand 编码后发布到 Disruptor RingBuffer 的异步门面
-// （submitCommand/submitCommandAsync/submitCommandAsyncFullResponse 等），本身不持有引擎状态。
-// Rust 版塌缩为同步门面：直接持有一个 `ExchangeCore` 并调用 `process_command`，每个 `submit*`
-// 方法对应 Java 一种 ApiCommand 的构造 + 提交，返回值也简化为 `CommandResultCode`（无 Future）。
-
-// 以下请求 DTO 是各 submit 方法的强类型入参，字段与目标 `OrderCommand` 字段一一对应；
-// 对应 Java 侧各 `ApiPlaceOrder`/`ApiCancelOrder`/... 的字段集合（Java 直接用这些 Api*Command
-// 对象经 `submitCommand` 编码进 RingBuffer，这里只是构造 `OrderCommand` 前的中间形态）。
 #[derive(Debug, Clone)]
 pub struct PlaceOrderRequest {
     pub order_id: i64,
@@ -95,9 +87,6 @@ pub struct MarginAdjustmentRequest {
     pub order_id: i64,
 }
 
-// 清算域系统命令的强类型入参，字段与 Java `ApiLiquidationOrder`/`ApiIFTakeOver`/`ApiAutoDeleveraging`/
-// `ApiLiquidationScan`/`ApiRepriceLoanRates` 逐一对齐。集群 raft 回流由外层用这些方法把 FORCE/IF/ADL 提回
-// 引擎、scheduler 用 SCAN/REPRICE；单节点这些命令由 `LiquidationEngine.command_submitter` 内部生成、不经此。
 #[derive(Debug, Clone, Copy)]
 pub struct LiquidationOrderRequest {
     pub order_id: i64,
@@ -144,10 +133,6 @@ pub struct RepriceLoanRatesRequest {
     pub timestamp: i64,
 }
 
-/// 对应 Java `ExchangeApi`：调用方门面。`core` 直接持有引擎（对比 Java 侧通过 RingBuffer 间接驱动
-/// 独立线程上的 RiskEngine/MatchingEngineRouter），`last_cmd` 保留最近一次提交后的完整 `OrderCommand`
-/// （含 matcher_event/fund_events/market_data），供 `last_*` 系列访问器读取——近似 Java
-/// `submitCommandAsyncFullResponse` 拿到的回填结果，但这里是同步、单条、无需 Future。
 #[derive(Default)]
 pub struct ExchangeApi {
     core: ExchangeCore,
@@ -159,16 +144,10 @@ impl ExchangeApi {
         ExchangeApi { core: ExchangeCore::new(), last_cmd: None }
     }
 
-    /// 用一个**已配置好的** `ExchangeCore` 构造门面（对应 Java `ExchangeCore` 内部 `new ExchangeApi(...)` 的
-    /// 反转：Rust 是 api 包 core）。resultsConsumer / 序列化后端 / 命令出口都在 core 上装好后再包进来——
-    /// `ExchangeApi` 自身不碰这些装配（尤其 resultsConsumer 是 `ExchangeCore` 的事）。
     pub fn from_core(core: ExchangeCore) -> Self {
         ExchangeApi { core, last_cmd: None }
     }
 
-
-    // 内部帮助函数：同步跑一条 cmd 并缓存结果，是下面各 submit 类方法的共同尾调用；
-    // 对应 Java 每个 ApiXxxCommand 经 `submitCommand`/`submitCommandAsync` 提交后拿 resultCode 的落点。
     fn run(&mut self, mut cmd: OrderCommand) -> CommandResultCode {
         self.core.process_command(&mut cmd);
         let rc = cmd.result_code.expect("process_command always sets result_code");
@@ -176,14 +155,10 @@ impl ExchangeApi {
         rc
     }
 
-    /// 对应 Java `BatchAddAccountsCommand`/初始化阶段直接调用 `currencySpecificationProvider.addCurrency`
-    /// 的单币种版本；非交易类配置，绕开 `run`/`OrderCommand` 直接改 SSP。
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
     }
 
-    /// 对应 Java 添加 symbol 的批处理路径：base/quote 币种必须先注册，否则 `InvalidSymbol`；
-    /// 成功后现货/期货 symbol 都要同步进 matching router（对应 Java `MatchingEngineRouter` 建空 orderBook）。
     pub fn add_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
         if self.core.ssp.get_currency(spec.base_currency).is_none()
             || self.core.ssp.get_currency(spec.quote_currency).is_none()
@@ -197,7 +172,6 @@ impl ExchangeApi {
         rc
     }
 
-    /// `add_symbol` 的期货专用门：非期货类型直接拒绝（`UnsupportedSymbolType`），不进入通用校验。
     pub fn add_futures_symbol(&mut self, spec: CoreSymbolSpecification) -> CommandResultCode {
         if !spec.symbol_type.is_futures_contract() {
             return CommandResultCode::UnsupportedSymbolType;
@@ -205,27 +179,21 @@ impl ExchangeApi {
         self.add_symbol(spec)
     }
 
-    /// 对应 Java `ApiAddUser` / `OrderCommandType.ADD_USER`。
     pub fn add_user(&mut self, uid: i64) -> CommandResultCode {
         let cmd = OrderCommand { command: OrderCommandType::AddUser, uid, ..Default::default() };
         self.run(cmd)
     }
 
-    /// 对应 Java 通过配置项 `MARGIN_TRADING_ENABLED` 挂接 `LiquidationEngine.commandSubmitter` 后
-    /// 打开清算调度；这里简化为直接置位 `liquidation_engine.is_running`（无独立扫描线程）。
     pub fn enable_liquidation(&mut self) {
         self.core.risk.liquidation_engine.is_running = true;
     }
 
-    /// 批量版 `add_currency`，对应 Java `BatchAddAccountsCommand` 之类批处理入口的币种部分。
     pub fn add_currencies(&mut self, currencies: impl IntoIterator<Item = CoreCurrencySpecification>) {
         for spec in currencies {
             self.core.ssp.add_currency(spec);
         }
     }
 
-    /// 批量版 `add_symbol`：非现货 symbol 在保证金交易未启用(`cfg_margin_trading_enabled == false`)时
-    /// 被静默跳过（对齐 Java 批处理里对 margin symbol 的门控，现货恒放行）。
     pub fn add_symbols(&mut self, symbols: impl IntoIterator<Item = CoreSymbolSpecification>) {
         for spec in symbols {
             if spec.symbol_type != SymbolType::CurrencyExchangePair && !self.core.risk.cfg_margin_trading_enabled {
@@ -236,8 +204,6 @@ impl ExchangeApi {
         }
     }
 
-    /// 批量建账户并充值初始余额：已存在的 uid 跳过（不覆盖），充值同时把等额记入
-    /// `risk.adjustments` 负值，保持全局守恒（对应 Java 批量种子账户流程 + BALANCE_ADJUSTMENT 的守恒约定）。
     pub fn add_accounts(&mut self, accounts: impl IntoIterator<Item = (i64, Vec<(i32, i64)>)>) {
         for (uid, balances) in accounts {
             if self.core.ups.add_empty_user_profile(uid) != CommandResultCode::Success {
@@ -252,21 +218,16 @@ impl ExchangeApi {
         }
     }
 
-    /// 批量版 `add_loan`（loan 池初始化/预设批处理入口）。
     pub fn add_loans(&mut self, cmds: impl IntoIterator<Item = BatchAddLoanCommand>) {
         for cmd in cmds {
             self.core.risk.apply_add_loan(&cmd, &mut self.core.ssp);
         }
     }
 
-    /// 对应 Java `ADD_LOAN` 批处理指令：绕开 `run`/`OrderCommand`，直接调用 RiskEngine 的 loan 配置
-    /// 应用逻辑（非交易类初始化路径）。
     pub fn add_loan(&mut self, cmd: BatchAddLoanCommand) {
         self.core.risk.apply_add_loan(&cmd, &mut self.core.ssp);
     }
 
-    /// 对应 Java `ApiAdjustUserBalance` / `OrderCommandType.BALANCE_ADJUSTMENT`：`amount` 正为入金、
-    /// 负为出金，`txid` 作为幂等去重键写入 `order_id`。
     pub fn balance_adjustment(
         &mut self,
         uid: i64,
@@ -285,7 +246,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiPlaceOrder`（现货）/ `OrderCommandType.PLACE_ORDER`。
     pub fn place_order(&mut self, req: PlaceOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -302,7 +262,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiCancelOrder` / `OrderCommandType.CANCEL_ORDER`。
     pub fn cancel_order(&mut self, req: CancelOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::CancelOrder,
@@ -314,7 +273,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiMoveOrder` / `OrderCommandType.MOVE_ORDER`。
     pub fn move_order(&mut self, req: MoveOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::MoveOrder,
@@ -327,7 +285,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiReduceOrder` / `OrderCommandType.REDUCE_ORDER`。
     pub fn reduce_order(&mut self, req: ReduceOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::ReduceOrder,
@@ -340,7 +297,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiPlaceOrder`（期货，带杠杆/保证金模式/只减仓标志）/ `OrderCommandType.PLACE_ORDER`。
     pub fn place_futures_order(&mut self, req: PlaceFuturesOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::PlaceOrder,
@@ -359,7 +315,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiClosePosition` / `OrderCommandType.CLOSE_POSITION`。
     pub fn close_position(&mut self, req: ClosePositionRequest) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::ClosePosition,
@@ -389,7 +344,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiLiquidationOrder` / `OrderCommandType.FORCE_LIQUIDATION`。
     pub fn submit_liquidation_order(&mut self, req: LiquidationOrderRequest) -> CommandResultCode {
         self.run(OrderCommand {
             command: OrderCommandType::ForceLiquidation,
@@ -405,7 +359,6 @@ impl ExchangeApi {
         })
     }
 
-    /// 对应 Java `ApiIFTakeOver` / `OrderCommandType.IF_TAKEOVER`。
     pub fn submit_if_takeover(&mut self, req: IfTakeoverRequest) -> CommandResultCode {
         self.run(OrderCommand {
             command: OrderCommandType::IfTakeover,
@@ -420,7 +373,6 @@ impl ExchangeApi {
         })
     }
 
-    /// 对应 Java `ApiAutoDeleveraging` / `OrderCommandType.AUTO_DELEVERAGING`。
     pub fn submit_auto_deleveraging(&mut self, req: AutoDeleveragingRequest) -> CommandResultCode {
         self.run(OrderCommand {
             command: OrderCommandType::AutoDeleveraging,
@@ -435,8 +387,6 @@ impl ExchangeApi {
         })
     }
 
-    /// 对应 Java `ApiLiquidationScan` / `OrderCommandType.LIQUIDATION_SCAN`：symbol=-1 全量兜底扫描，
-    /// `scan_slice`/`slice_count` 编码进 uid/size（见 `covered_by_scan_slice` 分片）。
     pub fn submit_liquidation_scan(&mut self, req: LiquidationScanRequest) -> CommandResultCode {
         self.run(OrderCommand {
             command: OrderCommandType::LiquidationScan,
@@ -448,7 +398,6 @@ impl ExchangeApi {
         })
     }
 
-    /// 对应 Java `ApiRepriceLoanRates` / `OrderCommandType.REPRICE_LOAN_RATES`。
     pub fn submit_reprice_loan_rates(&mut self, req: RepriceLoanRatesRequest) -> CommandResultCode {
         self.run(OrderCommand {
             command: OrderCommandType::RepriceLoanRates,
@@ -457,122 +406,89 @@ impl ExchangeApi {
         })
     }
 
-    // ── 结算 / 保险基金 / 内部转账（对应 Java ApiSettlePNL/ApiSettleFundingFees/ApiResetFee/
-    //    ApiInternalTransfer/ApiInsuranceFundDeposit/ApiInsuranceFundWithdraw）──
-
-    /// 对应 Java `ApiSettlePNL` / `OrderCommandType.SETTLE_PNL`（交割合约按 `settle_price` 结算平仓）。
     pub fn settle_pnl(&mut self, symbol: i32, settle_price: i64, txid: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::SettlePnl, symbol, price: settle_price, order_id: txid, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiSettleFundingFees` / `OrderCommandType.SETTLE_FUNDINGFEES`（`rate`/`rate_scale_k` 定资金费率）。
     pub fn settle_funding_fees(&mut self, symbol: i32, action: OrderAction, rate: i64, rate_scale_k: i64, txid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::SettleFundingfees, symbol, action: Some(action), price: rate, size: rate_scale_k, order_id: txid, ..Default::default() })
     }
 
-    /// 对应 Java `ApiResetFee` / `OrderCommandType.RESET_FEE`（运营重置手续费桶）。
     pub fn reset_fee(&mut self, txid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::ResetFee, order_id: txid, ..Default::default() })
     }
 
-    /// 对应 Java `ApiInternalTransfer` / `OrderCommandType.INTERNAL_TRANSFER`（`from_uid`→`to_uid` 划转 `amount`）。
     pub fn internal_transfer(&mut self, from_uid: i64, to_uid: i64, currency: i32, amount: i64, txid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::InternalTransfer, uid: from_uid, size: to_uid, symbol: currency, price: amount, order_id: txid, ..Default::default() })
     }
 
-    /// 对应 Java `ApiInsuranceFundDeposit` / `OrderCommandType.IF_DEPOSIT`（向 symbol 保险基金充值）。
     pub fn insurance_fund_deposit(&mut self, symbol: i32, amount: i64, txid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::IfDeposit, symbol, price: amount, order_id: txid, ..Default::default() })
     }
 
-    /// 对应 Java `ApiInsuranceFundWithdraw` / `OrderCommandType.IF_WITHDRAW`。
     pub fn insurance_fund_withdraw(&mut self, symbol: i32, amount: i64, txid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::IfWithdraw, symbol, price: amount, order_id: txid, ..Default::default() })
     }
 
-    // ── 借贷 Isolated（对应 Java ApiLoanCreate/ApiLoanRepay/ApiLoanAddCollateral/
-    //    ApiLoanReleaseCollateral/ApiLoanForceLiquidate）──
-
-    /// 对应 Java `ApiLoanCreate` / `OrderCommandType.LOAN_CREATE`。
     #[allow(clippy::too_many_arguments)]
     pub fn loan_create(&mut self, order_id: i64, uid: i64, symbol: i32, loan_id: i64, collateral: i64, principal: i64, rate_mode: LoanRateMode, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanCreate, order_id, uid, symbol, size: collateral, price: principal, reserve_bid_price: loan_id, user_cookie: rate_mode.code() as i32, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanRepay` / `OrderCommandType.LOAN_REPAY`。
     pub fn loan_repay(&mut self, order_id: i64, uid: i64, loan_id: i64, repay_amount: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanRepay, order_id, uid, price: repay_amount, reserve_bid_price: loan_id, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanAddCollateral` / `OrderCommandType.LOAN_ADD_COLLATERAL`。
     pub fn loan_add_collateral(&mut self, order_id: i64, uid: i64, loan_id: i64, amount: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanAddCollateral, order_id, uid, size: amount, reserve_bid_price: loan_id, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanReleaseCollateral` / `OrderCommandType.LOAN_RELEASE_COLLATERAL`。
     pub fn loan_release_collateral(&mut self, order_id: i64, uid: i64, loan_id: i64, amount: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanReleaseCollateral, order_id, uid, size: amount, reserve_bid_price: loan_id, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanForceLiquidate` / `OrderCommandType.LOAN_FORCE_LIQUIDATE`（action/order_type 由引擎内部
-    /// 置 ASK/IOC，见 `LoanCommandDispatcher`）。
     #[allow(clippy::too_many_arguments)]
     pub fn loan_force_liquidate(&mut self, order_id: i64, uid: i64, symbol: i32, loan_id: i64, price: i64, size: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanForceLiquidate, order_id, uid, symbol, price, size, reserve_bid_price: loan_id, timestamp, ..Default::default() })
     }
 
-    // ── 借贷 Cross（对应 Java ApiLoanCross*）──
-
-    /// 对应 Java `ApiLoanCrossAddCollateral` / `OrderCommandType.LOAN_CROSS_ADD_COLLATERAL`。
     pub fn loan_cross_add_collateral(&mut self, order_id: i64, uid: i64, currency: i32, amount: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanCrossAddCollateral, order_id, uid, symbol: currency, size: amount, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanCrossWithdrawCollateral` / `OrderCommandType.LOAN_CROSS_WITHDRAW_COLLATERAL`。
     pub fn loan_cross_withdraw_collateral(&mut self, order_id: i64, uid: i64, currency: i32, amount: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanCrossWithdrawCollateral, order_id, uid, symbol: currency, size: amount, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanCrossBorrow` / `OrderCommandType.LOAN_CROSS_BORROW`。
     pub fn loan_cross_borrow(&mut self, order_id: i64, uid: i64, symbol: i32, loan_id: i64, principal: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanCrossBorrow, order_id, uid, symbol, price: principal, reserve_bid_price: loan_id, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanCrossRepay` / `OrderCommandType.LOAN_CROSS_REPAY`。
     pub fn loan_cross_repay(&mut self, order_id: i64, uid: i64, loan_id: i64, repay_amount: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanCrossRepay, order_id, uid, price: repay_amount, reserve_bid_price: loan_id, timestamp, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanCrossForceLiquidate` / `OrderCommandType.LOAN_CROSS_FORCE_LIQUIDATE`（action/order_type
-    /// 由引擎内部置）。`target_loan_id` 编码进 `reserve_bid_price`。
     #[allow(clippy::too_many_arguments)]
     pub fn loan_cross_force_liquidate(&mut self, order_id: i64, uid: i64, symbol: i32, target_loan_id: i64, price: i64, size: i64, timestamp: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanCrossForceLiquidate, order_id, uid, symbol, price, size, reserve_bid_price: target_loan_id, timestamp, ..Default::default() })
     }
 
-    // ── 借贷保险基金 / 资金池（对应 Java ApiLoanIfDeposit/ApiLoanIfWithdraw/ApiPoolDeposit/ApiPoolWithdraw）──
-
-    /// 对应 Java `ApiLoanIfDeposit` / `OrderCommandType.LOAN_IF_DEPOSIT`。
     pub fn loan_if_deposit(&mut self, currency: i32, amount: i64, txid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanIfDeposit, symbol: currency, size: amount, order_id: txid, ..Default::default() })
     }
 
-    /// 对应 Java `ApiLoanIfWithdraw` / `OrderCommandType.LOAN_IF_WITHDRAW`。
     pub fn loan_if_withdraw(&mut self, currency: i32, amount: i64, txid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::LoanIfWithdraw, symbol: currency, size: amount, order_id: txid, ..Default::default() })
     }
 
-    /// 对应 Java `ApiPoolDeposit` / `OrderCommandType.POOL_DEPOSIT`。
     pub fn pool_deposit(&mut self, currency: i32, amount: i64, order_id: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::PoolDeposit, symbol: currency, size: amount, order_id, ..Default::default() })
     }
 
-    /// 对应 Java `ApiPoolWithdraw` / `OrderCommandType.POOL_WITHDRAW`。
     pub fn pool_withdraw(&mut self, currency: i32, amount: i64, order_id: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::PoolWithdraw, symbol: currency, size: amount, order_id, ..Default::default() })
     }
 
-    /// 对应 Java `ApiChangeLeverage` / `OrderCommandType.LEVERAGE_ADJUSTMENT`。
     pub fn leverage_adjustment(&mut self, uid: i64, symbol: i32, leverage: i32) -> CommandResultCode {
         let cmd = OrderCommand {
             command: OrderCommandType::LeverageAdjustment,
@@ -584,15 +500,11 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    /// 对应 Java `ApiPositionModeAdjustment` / `OrderCommandType.POSITION_MODE_ADJUSTMENT`：
-    /// `hedge=true` 即双向持仓模式（借用 `action=Bid` 编码，无独立布尔字段）。
     pub fn adjust_position_mode(&mut self, uid: i64, hedge: bool) -> CommandResultCode {
         let action = if hedge { OrderAction::Bid } else { OrderAction::Ask };
         self.run(OrderCommand { command: OrderCommandType::PositionModeAdjustment, uid, action: Some(action), ..Default::default() })
     }
 
-    /// 对应 Java `ApiMarkPriceAdjustment` / `OrderCommandType.MARKPRICE_ADJUSTMENT`：可能触发强平级联
-    /// （单节点由 `process_command` 自驱 `pending_commands`，集群交 command_submitter 走 raft）。
     pub fn set_mark_price(&mut self, symbol: i32, price: i64) -> CommandResultCode {
         self.run(OrderCommand {
             command: OrderCommandType::MarkpriceAdjustment,
@@ -602,18 +514,14 @@ impl ExchangeApi {
         })
     }
 
-    /// 对应 Java `ApiSuspendUser` / `OrderCommandType.SUSPEND_USER`。
     pub fn suspend_user(&mut self, uid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::SuspendUser, uid, ..Default::default() })
     }
 
-    /// 对应 Java `ApiResumeUser` / `OrderCommandType.RESUME_USER`。
     pub fn resume_user(&mut self, uid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::ResumeUser, uid, ..Default::default() })
     }
 
-    /// 逃生口：直接提交任意已构造好的 `OrderCommand`，供上面没有专门包装方法的指令类型使用
-    /// （例如测试或 Raft 状态机重放场景）。
     pub fn submit(&mut self, cmd: OrderCommand) -> CommandResultCode {
         self.run(cmd)
     }
@@ -638,8 +546,6 @@ impl ExchangeApi {
         *self.core.risk.adjustments.get(&currency).unwrap_or(&0)
     }
 
-    /// 对应 Java `ApiOrderBookRequest` / `OrderCommandType.ORDER_BOOK_REQUEST`：同步查询 L2 快照，
-    /// 走完整 `process_command`（本身不改状态，只是复用统一入口以获得撮合簿只读快照）。
     pub fn request_l2(&mut self, symbol: i32, depth: i32) -> L2MarketData {
         let mut cmd = OrderCommand {
             command: OrderCommandType::OrderBookRequest,
@@ -651,8 +557,6 @@ impl ExchangeApi {
         cmd.market_data.take().unwrap_or_default()
     }
 
-    /// 最近一次 `run`/`submit` 提交的完整命令回执；对应 Java `submitCommandAsyncFullResponse` 拿到的
-    /// `OrderCommand`，这里换成同步取值。
     pub fn last_cmd(&self) -> &OrderCommand {
         self.last_cmd.as_ref().expect("no command submitted yet")
     }
@@ -665,8 +569,6 @@ impl ExchangeApi {
         &self.last_cmd().fund_events
     }
 
-    // 底下三个直接暴露内部引擎子模块的只读访问器：Java 侧一般通过专门的 ReportQuery 间接读取，
-    // 这里为测试/调试保留直接逃生口。
     pub fn ups(&self) -> &UserProfileService {
         &self.core.ups
     }
@@ -679,40 +581,30 @@ impl ExchangeApi {
         &self.core.risk
     }
 
-    // 以下报表查询转发到 `reports.rs`，对应 Java `common/api/reports/*ReportQuery`
-    // + `ReportQueriesHandler`/`RiskEngine` 侧聚合逻辑，见该文件顶部注释。
-
-    /// 对应 Java `TotalCurrencyBalanceReportQuery`。
     pub fn total_balance(&self) -> crate::core::reports::TotalCurrencyBalanceReport {
         self.core.query_total_balance()
     }
 
-    /// 对应 Java `SingleUserReportQuery`。
     pub fn single_user(&self, uid: i64, now_ms: i64) -> crate::core::reports::SingleUserReport {
         self.core.query_single_user(uid, now_ms)
     }
 
-    /// 对应 Java `InsuranceFundReportQuery`。
     pub fn insurance_fund(&self) -> crate::core::reports::InsuranceFundReport {
         self.core.query_insurance_fund()
     }
 
-    /// 对应 Java `SymbolCurrencyReportQuery`。
     pub fn symbol_currency(&self) -> crate::core::reports::SymbolCurrencyReport {
         self.core.query_symbol_currency()
     }
 
-    /// 对应 Java `FeeReportQuery`。
     pub fn fee_report(&self) -> crate::core::reports::FeeReport {
         self.core.query_fee_report()
     }
 
-    /// 对应 Java `LoanPlatformReportQuery`。
     pub fn loan_platform(&self) -> crate::core::reports::LoanPlatformReport {
         self.core.query_loan_platform()
     }
 
-    /// 对应 Java `StateHashReportQuery`：用于跨节点/跨语言一致性对拍（见 CONSISTENCY.md）。
     pub fn state_hash(&self) -> crate::core::reports::StateHashReport {
         self.core.query_state_hash()
     }

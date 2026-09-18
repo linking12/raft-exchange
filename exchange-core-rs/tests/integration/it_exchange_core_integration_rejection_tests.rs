@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-    // 翻译自 Java `ITExchangeCoreIntegrationRejection`（testMultiBuy/testMultiSell 用例矩阵）
-    // 验证现货（带手续费）与合约品种在 GTC/IOC/FOK_BUDGET/IOC_BUDGET 各订单类型、以及无拒绝/按 size 拒绝/按预算拒绝三种场景下都能正确撮合或部分拒单，且全局账面守恒。
 
     use std::collections::BTreeMap;
 
@@ -148,7 +146,6 @@ mod tests {
         }
     }
 
-    // 对应 Java 私有方法 testMultiBuy：4 个 ASK 挂单构建订单簿深度，UID_4 用给定订单类型下 BID 吃单
     fn test_multi_buy(is_margin: bool, order_type: OrderType, rejection: RejectionCause) {
         let mut api = setup();
         let size = 40 + if rejection == RejectionBySize { 1 } else { 0 };
@@ -171,7 +168,6 @@ mod tests {
         assert_globally_conserved(&api);
     }
 
-    // 对应 Java 私有方法 testMultiSell：4 个 BID 挂单构建订单簿深度，UID_4 用给定订单类型下 ASK 吃单
     fn test_multi_sell(is_margin: bool, order_type: OrderType, rejection: RejectionCause) {
         let mut api = setup();
         let size = 22 + if rejection == RejectionBySize { 1 } else { 0 };
@@ -196,187 +192,181 @@ mod tests {
         assert_globally_conserved(&api);
     }
 
-    // 对应 Java testMultiBuyNoRejectionMarginGtc：合约 GTC 买单吃单，全部成交，无拒绝
     #[test]
     fn test_multi_buy_no_rejection_margin_gtc() {
         test_multi_buy(true, OrderType::Gtc, NoRejection);
     }
-    // 对应 Java testMultiBuyNoRejectionExchangeGtc：现货 GTC 买单吃单，全部成交，无拒绝
+
     #[test]
     fn test_multi_buy_no_rejection_exchange_gtc() {
         test_multi_buy(false, OrderType::Gtc, NoRejection);
     }
-    // 对应 Java testMultiBuyNoRejectionExchangeIoc：现货 IOC 买单，size 精确覆盖订单簿深度，无拒绝
+
     #[test]
     fn test_multi_buy_no_rejection_exchange_ioc() {
         test_multi_buy(false, OrderType::Ioc, NoRejection);
     }
-    // 对应 Java testMultiBuyNoRejectionMarginIoc：合约版本，同上
+
     #[test]
     fn test_multi_buy_no_rejection_margin_ioc() {
         test_multi_buy(true, OrderType::Ioc, NoRejection);
     }
-    // 对应 Java testMultiBuyNoRejectionExchangeFokB：现货 FOK_BUDGET 买单，预算精确覆盖，全部成交
+
     #[test]
     fn test_multi_buy_no_rejection_exchange_fok_b() {
         test_multi_buy(false, OrderType::FokBudget, NoRejection);
     }
-    // 对应 Java testMultiBuyNoRejectionMarginFokB：合约版本，同上
+
     #[test]
     fn test_multi_buy_no_rejection_margin_fok_b() {
         test_multi_buy(true, OrderType::FokBudget, NoRejection);
     }
 
-    // 对应 Java testMultiBuyWithRejectionMarginGtc：合约 GTC 买单 size 多 1，GTC 不会拒单，多出部分转为挂单
     #[test]
     fn test_multi_buy_with_rejection_margin_gtc() {
         test_multi_buy(true, OrderType::Gtc, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithRejectionExchangeGtc：现货版本，同上
+
     #[test]
     fn test_multi_buy_with_rejection_exchange_gtc() {
         test_multi_buy(false, OrderType::Gtc, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithRejectionExchangeIoc：现货 IOC 买单 size 多 1，多出部分按 IOC 规则被拒
+
     #[test]
     fn test_multi_buy_with_rejection_exchange_ioc() {
         test_multi_buy(false, OrderType::Ioc, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithRejectionMarginIoc：合约版本，同上
+
     #[test]
     fn test_multi_buy_with_rejection_margin_ioc() {
         test_multi_buy(true, OrderType::Ioc, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithSizeRejectionExchangeFokB：现货 FOK_BUDGET，size 多 1 但预算充足，整单按 size 校验被拒
+
     #[test]
     fn test_multi_buy_with_size_rejection_exchange_fok_b() {
         test_multi_buy(false, OrderType::FokBudget, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithSizeRejectionMarginFokB：合约版本，同上
+
     #[test]
     fn test_multi_buy_with_size_rejection_margin_fok_b() {
         test_multi_buy(true, OrderType::FokBudget, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithBudgetRejectionExchangeFokB：现货 FOK_BUDGET，预算减 1，整单按预算校验被拒
+
     #[test]
     fn test_multi_buy_with_budget_rejection_exchange_fok_b() {
         test_multi_buy(false, OrderType::FokBudget, RejectionByBudget);
     }
-    // 对应 Java testMultiBuyWithBudgetRejectionMarginFokB：合约版本，同上
+
     #[test]
     fn test_multi_buy_with_budget_rejection_margin_fok_b() {
         test_multi_buy(true, OrderType::FokBudget, RejectionByBudget);
     }
 
-    // 对应 Java testMultiBuyNoRejectionExchangeIocB：现货 IOC_BUDGET，预算精确覆盖整本订单簿，全部成交
     #[test]
     fn test_multi_buy_no_rejection_exchange_ioc_b() {
         test_multi_buy(false, OrderType::IocBudget, NoRejection);
     }
-    // 对应 Java testMultiBuyNoRejectionMarginIocB：合约版本，同上
+
     #[test]
     fn test_multi_buy_no_rejection_margin_ioc_b() {
         test_multi_buy(true, OrderType::IocBudget, NoRejection);
     }
-    // 对应 Java testMultiBuyWithSizeRejectionExchangeIocB：现货 IOC_BUDGET，size 多 1 但预算够，簿子吃光后多出部分被拒
+
     #[test]
     fn test_multi_buy_with_size_rejection_exchange_ioc_b() {
         test_multi_buy(false, OrderType::IocBudget, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithSizeRejectionMarginIocB：合约版本，同上
+
     #[test]
     fn test_multi_buy_with_size_rejection_margin_ioc_b() {
         test_multi_buy(true, OrderType::IocBudget, RejectionBySize);
     }
-    // 对应 Java testMultiBuyWithBudgetRejectionExchangeIocB：现货 IOC_BUDGET，预算减 1，按价档逐档吃单到预算耗尽后剩余部分被拒（区别于 FOK 的整单弃成）
+
     #[test]
     fn test_multi_buy_with_budget_rejection_exchange_ioc_b() {
         test_multi_buy(false, OrderType::IocBudget, RejectionByBudget);
     }
-    // 对应 Java testMultiBuyWithBudgetRejectionMarginIocB：合约版本，同上
+
     #[test]
     fn test_multi_buy_with_budget_rejection_margin_ioc_b() {
         test_multi_buy(true, OrderType::IocBudget, RejectionByBudget);
     }
 
-    // 对应 Java testMultiSellNoRejectionMarginGtc：合约 GTC 卖单吃单，全部成交，无拒绝
     #[test]
     fn test_multi_sell_no_rejection_margin_gtc() {
         test_multi_sell(true, OrderType::Gtc, NoRejection);
     }
-    // 对应 Java testMultiSellNoRejectionExchangeGtc：现货版本，同上
+
     #[test]
     fn test_multi_sell_no_rejection_exchange_gtc() {
         test_multi_sell(false, OrderType::Gtc, NoRejection);
     }
-    // 对应 Java testMultiSellNoRejectionMarginIoc：合约 IOC 卖单，size 精确覆盖，无拒绝
+
     #[test]
     fn test_multi_sell_no_rejection_margin_ioc() {
         test_multi_sell(true, OrderType::Ioc, NoRejection);
     }
-    // 对应 Java testMultiSellNoRejectionExchangeIoc：现货版本，同上
+
     #[test]
     fn test_multi_sell_no_rejection_exchange_ioc() {
         test_multi_sell(false, OrderType::Ioc, NoRejection);
     }
-    // 对应 Java testMultiSellNoRejectionMarginFokB：合约 FOK_BUDGET 卖单，预算精确覆盖，全部成交
+
     #[test]
     fn test_multi_sell_no_rejection_margin_fok_b() {
         test_multi_sell(true, OrderType::FokBudget, NoRejection);
     }
-    // 对应 Java testMultiSellNoRejectionExchangeFokB：现货版本，同上
+
     #[test]
     fn test_multi_sell_no_rejection_exchange_fok_b() {
         test_multi_sell(false, OrderType::FokBudget, NoRejection);
     }
 
-    // 对应 Java testMultiSellWithRejectionMarginGtc：合约 GTC 卖单 size 多 1，GTC 不会拒单，多出部分转为挂单
     #[test]
     fn test_multi_sell_with_rejection_margin_gtc() {
         test_multi_sell(true, OrderType::Gtc, RejectionBySize);
     }
-    // 对应 Java testMultiSellWithRejectionExchangeGtc：现货版本，同上
+
     #[test]
     fn test_multi_sell_with_rejection_exchange_gtc() {
         test_multi_sell(false, OrderType::Gtc, RejectionBySize);
     }
-    // 对应 Java testMultiSellWithRejectionMarginIoc：合约 IOC 卖单 size 多 1，多出部分按 IOC 规则被拒
+
     #[test]
     fn test_multi_sell_with_rejection_margin_ioc() {
         test_multi_sell(true, OrderType::Ioc, RejectionBySize);
     }
-    // 对应 Java testMultiSellWithRejectionExchangeIoc：现货版本，同上
+
     #[test]
     fn test_multi_sell_with_rejection_exchange_ioc() {
         test_multi_sell(false, OrderType::Ioc, RejectionBySize);
     }
-    // 对应 Java testMultiSellWithSizeRejectionMarginFokB：合约 FOK_BUDGET，size 多 1 但预算充足，整单按 size 校验被拒
+
     #[test]
     fn test_multi_sell_with_size_rejection_margin_fok_b() {
         test_multi_sell(true, OrderType::FokBudget, RejectionBySize);
     }
-    // 对应 Java testMultiSellWithSizeRejectionExchangeFokB：现货版本，同上
+
     #[test]
     fn test_multi_sell_with_size_rejection_exchange_fok_b() {
         test_multi_sell(false, OrderType::FokBudget, RejectionBySize);
     }
-    // 对应 Java testMultiSellWithExpectationRejectionMarginFokB：合约 FOK_BUDGET，预算不足（少收 1），整单按预算校验被拒
+
     #[test]
     fn test_multi_sell_with_expectation_rejection_margin_fok_b() {
         test_multi_sell(true, OrderType::FokBudget, RejectionByBudget);
     }
-    // 对应 Java testMultiSellWithExpectationRejectionExchangeFokB：现货版本，同上
+
     #[test]
     fn test_multi_sell_with_expectation_rejection_exchange_fok_b() {
         test_multi_sell(false, OrderType::FokBudget, RejectionByBudget);
     }
 
-    // 对应 Java testMultiSellAskRejectionExchangeIocB：ASK 方向的 IOC_BUDGET 引擎不支持部分成交，此处仅冒烟验证 command 能成功入队
     #[test]
     fn test_multi_sell_ask_rejection_exchange_ioc_b() {
         test_multi_sell(false, OrderType::IocBudget, NoRejection);
     }
-    // 对应 Java testMultiSellAskRejectionMarginIocB：合约版本，同上
+
     #[test]
     fn test_multi_sell_ask_rejection_margin_ioc_b() {
         test_multi_sell(true, OrderType::IocBudget, NoRejection);

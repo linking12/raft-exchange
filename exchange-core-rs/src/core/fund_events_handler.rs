@@ -1,16 +1,12 @@
-// 对应 Java `IFundEventsHandler`。Java 用对象池(ArrayDeque borrow/recycle)避免 GC 压力；
-// Rust 无此需要，FundEventReport 及三个快照子结构直接按值构造/移动。
 use crate::core::common::fund_event::{FundEvent, FundEventType};
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::utils::core_arithmetic_utils::calculate_amount_bid;
 
-/// 对应 Java `IFundEventsHandler`：资金事件（存取款/锁定解锁/成交转账/费用重置/loan 借还等）的下游回调接口。
 pub trait FundEventsHandler {
     fn fund_event_report(&mut self, report: FundEventReport);
 }
 
-/// 对应 Java `IFundEventsHandler.FundEventReport`：单条资金事件的对外快照（账户+余额+仓位+loan 三段视图）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FundEventReport {
     pub uni_id: i64,
@@ -22,8 +18,7 @@ pub struct FundEventReport {
 }
 
 impl FundEventReport {
-    /// 对应 Java `FundEventReport.fromFundEvent`：从内部 `FundEvent` 投影出对外快照，`uni_id` 由调用方
-    /// 用 `ExecutionIdGenerator::build_trade_exec_id(seq, index, false)` 生成（见 simple_events_processor）。
+
     pub fn from_fund_event(fund_event: &FundEvent, uni_id: i64) -> Self {
         FundEventReport {
             uni_id,
@@ -36,7 +31,6 @@ impl FundEventReport {
     }
 }
 
-/// 对应 Java `FundEventReport.BalanceSnapshot`：事件发生后的币种余额快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BalanceSnapshot {
     pub currency: i32,
@@ -51,7 +45,6 @@ impl BalanceSnapshot {
     }
 }
 
-/// 对应 Java `FundEventReport.PositionSnapshot`：事件相关仓位（futures）的估值快照；现货/非仓位事件全 0。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PositionSnapshot {
     pub symbol_id: i32,
@@ -103,8 +96,6 @@ impl PositionSnapshot {
     }
 }
 
-/// 对应 Java `FundEventReport.LoanSnapshot`：loan 用户维度事件快照（操作后的借贷侧/抵押侧状态）；
-/// 非 loan 事件全 0。字段含义见 Java 侧同名字段注释（本金/利息按 balances.currency_scale_k 还原）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoanSnapshot {
     pub mode: i8,

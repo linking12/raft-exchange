@@ -1,22 +1,3 @@
-//! 对应 Java `MatchingEngineRouter`：按 symbolId 路由撮合命令到各自订单簿（撮合引擎的分片单元）。
-//!
-//! Java 版本职责重得多：除订单簿路由外，还承担 symbol shard 归属判定
-//! （`symbolForThisHandler`，按 `symbol & shardMask == shardId`）、IF/ADL/
-//! 资金费结算/重置手续费/内部转账/借贷利率重定价等非撮合命令的分发
-//! （`ifProcessor`/`adlProcessor`/`fundingFeeProcessor`/`resetFeeProcessor`/
-//! `internalTransferCommandProcessor`/`loanRatePricingCommandProcessor`）、
-//! 二进制帧处理（委托给 `BinaryCommandsProcessor.acceptBinaryFrame`）、
-//! RESET/PERSIST_STATE_MATCHING/RECOVER_STATE_MATCHING 等生命周期命令、
-//! 以及 `BatchAddSymbolsCommand` 触发的 `addSymbol`。
-//!
-//! Rust 版本收窄为纯粹的"订单簿路由 + symbol 注册表"：`process_order` 只处理
-//! 直接作用于订单簿的命令子集（挂单/撤单/改单/减量/平仓/强平/订单簿查询），
-//! IF/ADL/资金费/内部转账/借贷利率重定价等命令分发在别处（`risk_engine.rs`
-//! 及各自的 command processor）完成，不在本文件内；分片归属判定
-//! （shardId/shardMask）、二进制帧累积也不在此实现——`binary_cmd` 字段仅为
-//! 保持快照字节布局与 Java 对齐而存在（同 `risk_engine.rs` 里 `binary_cmd`
-//! 字段的审计结论：生产路径不会向其写入数据）。
-
 use std::collections::BTreeMap;
 
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -29,9 +10,6 @@ use crate::core::orderbook::order_book_direct_impl::OrderBookDirectImpl;
 use crate::core::orderbook::order_book_naive_impl::OrderBookNaiveImpl;
 use crate::core::processors::binary_commands_processor::BinaryCommandsProcessor;
 
-/// symbolId -> 订单簿 的路由表，外加快照对齐用的二进制命令占位字段。
-/// 对应 Java `orderBooks: IntObjectHashMap<IOrderBook>`（本 Rust 版本固定用 `OrderBookDirectImpl`，
-/// 不像 Java 那样按 `OrderBookFactory` 可切换朴素/直接实现）。
 #[derive(Default)]
 pub struct MatchingEngineRouter {
     pub(crate) books: BTreeMap<i32, OrderBookDirectImpl>,
@@ -44,12 +22,6 @@ impl MatchingEngineRouter {
         MatchingEngineRouter { books: BTreeMap::new(), binary_cmd: BinaryCommandsProcessor::new() }
     }
 
-    /// 对应 Java `processMatchingCommand` + `IOrderBook.processCommand` 分派逻辑（本文件内收窄版的
-    /// `processOrder`：不含 shard 归属判定、非撮合命令分发）。
-    ///
-    /// 非撮合/借贷强平以外的借贷命令、以及资金费结算/IF/ADL/清算扫描等命令直接透传调用方已算好的
-    /// `result_code`（或在缺省时报 `MatchingUnsupportedCommand`），因为它们不作用于订单簿，
-    /// 路由到这里只是为了统一入口。
     pub fn process_order(&mut self, cmd: &mut OrderCommand) -> CommandResultCode {
         if cmd.command.is_non_trading()
             || (cmd.command.is_loan()
@@ -100,20 +72,14 @@ impl MatchingEngineRouter {
         rc
     }
 
-    /// 对应 Java `addSymbol`（经 `handleBinaryMessage` 处理 `BatchAddSymbolsCommand` 触发）：
-    /// 为给定 symbol 创建一本新订单簿。若已存在同 symbolId 的订单簿则静默跳过（Java 侧会
-    /// `log.warn` 后放弃，这里直接用 `entry().or_insert_with()` 达到同样的幂等效果，不报错）。
     pub fn add_symbol(&mut self, spec: &CoreSymbolSpecification) {
         self.books.entry(spec.symbol_id).or_insert_with(|| OrderBookDirectImpl::with_symbol_spec(spec.clone()));
     }
 
-    /// 对应 Java `OrderCommandType.RESET` 分支：清空所有订单簿（仅用于测试/重置场景）。
     pub fn reset(&mut self) {
         self.books.clear();
     }
 
-    /// 扫描所有订单簿，收集指定用户的挂单（symbolId, Order）列表。Java 侧无直接对应方法，
-    /// 是本仓库为报表/查询场景新增的辅助接口。
     pub fn user_orders(&self, uid: i64) -> Vec<(i32, Order)> {
         let mut out = Vec::new();
         for (&sym, book) in &self.books {
@@ -124,9 +90,6 @@ impl MatchingEngineRouter {
         out
     }
 
-    /// 汇总所有订单簿的 state hash，按 symbolId 升序滚动累加。Java 没有直接对应的单一方法，
-    /// 但语义上对应 Java 侧对 `orderBooks` 逐项调用 `stateHash()` 并汇总的做法（用于跨节点/
-    /// 跨语言一致性对拍）。
     pub fn order_books_state_hash(&self) -> i64 {
         let mut h: i64 = 17;
         for (&sym, book) in &self.books {
@@ -141,9 +104,6 @@ use crate::core::snapshot::chronicle_reader::{ChronicleError, ChronicleReader};
 use crate::core::snapshot::chronicle_writer::ChronicleWriter;
 use crate::core::snapshot::marshalling::ChronicleMarshallable;
 
-// 对应 Java `writeMarshallable`/`recoverStateBySnapshot` 的读构造：先写 shardId、shardMask
-// （Rust 单分片场景下恒为 0，仅为字节布局对齐而保留占位），再写 binaryCommandsProcessor，
-// 最后写 orderBooks（symbolId -> 订单簿）。
 impl ChronicleMarshallable for MatchingEngineRouter {
     fn chronicle_write(&self, w: &mut ChronicleWriter) {
         w.write_i32(0);
@@ -165,10 +125,6 @@ impl ChronicleMarshallable for MatchingEngineRouter {
     }
 }
 
-/// 读取一本订单簿时按 Java `OrderBookImplType` 编码分派：Java 快照里订单簿可能是
-/// NAIVE（简单实现，`IOrderBook.create` 用于旧格式/调试）或 DIRECT（生产用直接实现）编码。
-/// Rust 只保留 `OrderBookDirectImpl` 作为运行时表示，因此读到 NAIVE 编码时会先按朴素格式
-/// 解析出订单集合，再转换重建为 `OrderBookDirectImpl`（`restore_chronicle`），以兼容旧快照。
 fn read_order_book_dispatch(r: &mut ChronicleReader) -> Result<OrderBookDirectImpl, ChronicleError> {
     let impl_type = r.read_u8()?;
     match impl_type {

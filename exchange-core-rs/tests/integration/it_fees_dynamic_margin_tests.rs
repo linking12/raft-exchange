@@ -1,6 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITFeesDynamicMargin`（及其非 Latency 变体 `ITFeesDynamicMarginBasic`）
-// 验证动态保证金期货合约在挂单/吃单场景下手续费计算、持仓状态与资金守恒是否正确
+
 mod tests {
     use std::collections::BTreeMap;
 
@@ -106,7 +105,6 @@ mod tests {
         )
     }
 
-    // 校验 USD 全局资金守恒：用户余额 + 调整流水 + 手续费池 + 持仓浮盈亏与保证金 之和应为 0
     fn assert_conserved(api: &ExchangeApi) {
         let mut total: i64 = api.ups().users.values().map(|p| p.account(USD)).sum();
         total += api.adjustments(USD);
@@ -124,7 +122,6 @@ mod tests {
         assert_eq!(total, 0, "futures global conservation broken: USD total={total}");
     }
 
-    // 通用场景驱动：挂一笔 maker GTC 单，再用不同类型/尺寸的 taker 单吃单，校验持仓、手续费与守恒
     fn run_scenario(
         maker_action: OrderAction,
         maker_size: i64,
@@ -192,55 +189,46 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java shouldProcessFees_BidGtcMaker_AskIocTakerPartial：BID maker 挂单量大于 taker IOC 吃单量，taker 部分成交
     #[test]
     fn bid_gtc_maker_ask_ioc_taker_partial() {
         run_scenario(OrderAction::Bid, 100, OrderType::Ioc, 500);
     }
 
-    // 对应 Java shouldProcessFees_BidGtcMakerPartial_AskIocTaker：BID maker 挂单量小于 taker IOC 吃单量，maker 部分成交
     #[test]
     fn bid_gtc_maker_partial_ask_ioc_taker() {
         run_scenario(OrderAction::Bid, 500, OrderType::Ioc, 100);
     }
 
-    // 对应 Java shouldProcessFees_BidGtcMaker_AskIocTaker_FullyMatch：BID maker 与 ASK taker IOC 数量相等，完全成交
     #[test]
     fn bid_gtc_maker_ask_ioc_taker_fully_match() {
         run_scenario(OrderAction::Bid, 500, OrderType::Ioc, 500);
     }
 
-    // 对应 Java shouldProcessFees_AskGtcMaker_BidIocTakerPartial：ASK maker 挂单量大于 taker IOC 吃单量，taker 部分成交
     #[test]
     fn ask_gtc_maker_bid_ioc_taker_partial() {
         run_scenario(OrderAction::Ask, 100, OrderType::Ioc, 500);
     }
 
-    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidIocTaker：ASK maker 挂单量小于 taker IOC 吃单量，maker 部分成交
     #[test]
     fn ask_gtc_maker_partial_bid_ioc_taker() {
         run_scenario(OrderAction::Ask, 500, OrderType::Ioc, 100);
     }
 
-    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidGtcTaker：ASK maker 挂单量小于 taker GTC 吃单量，maker 部分成交
     #[test]
     fn ask_gtc_maker_partial_bid_gtc_taker() {
         run_scenario(OrderAction::Ask, 500, OrderType::Gtc, 100);
     }
 
-    // 对应 Java shouldProcessFees_AskGtcMaker_BidGtcTakerPartial：ASK maker 挂单量大于 taker GTC 吃单量，taker 部分成交
     #[test]
     fn ask_gtc_maker_bid_gtc_taker_partial() {
         run_scenario(OrderAction::Ask, 100, OrderType::Gtc, 500);
     }
 
-    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidFokTaker：ASK maker 部分成交，taker 用 FOK_BUDGET 全部成交
     #[test]
     fn ask_gtc_maker_partial_bid_fok_budget_taker() {
         run_scenario(OrderAction::Ask, 500, OrderType::FokBudget, 1);
     }
 
-    // 对应 Java shouldRequireTakerFees_GtcCancel1：BID 挂单需预留 taker 手续费+保证金，资金不足逐步补齐后下单成功再撤单，验证撤单后余额与手续费池
     #[test]
     fn should_require_taker_fees_gtc_cancel1() {
         let mut api = ExchangeApi::new();
@@ -276,7 +264,7 @@ mod tests {
         assert_eq!(api.fees(USD), 0);
         assert!(api.total_balance().is_global_zero());
     }
-    // Rust 独立交叉验证（非直接翻译某个 Java @Test）：手续费公式与 Java 侧 price*size*step*fee/scale 的独立算法比对
+
     #[test]
     fn fee_oracle_matches_java_independent_formula() {
         for filled in [1i64, 30, 100] {

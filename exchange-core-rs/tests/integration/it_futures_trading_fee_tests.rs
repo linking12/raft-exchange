@@ -1,8 +1,5 @@
 #[cfg(test)]
 mod tests {
-    // 翻译自 Java `ITFuturesTradingFeeCalculationTest`
-    // 验证期货动态手续费（maker/taker）在各类下单方式、部分成交、反手开仓、hedge 双向持仓、
-    // 追加保证金等场景下的计算是否正确，并校验 USD 全局守恒（账户余额 + adjustments + fees + 持仓浮盈 == 0）。
 
     use std::collections::BTreeMap;
 
@@ -121,7 +118,6 @@ fn btc_taker(size: i64, price: i64) -> i64 {
     calculate_taker_fee(size, price, BTC_TAKER_FEE, BTC_FEE_SCALE_K)
 }
 
-// 校验 USD 全局守恒：所有用户余额 + adjustments + fees + 持仓浮盈(按标记价)/extra_margin 之和应为 0
 fn assert_conserved_usd(api: &ExchangeApi) {
     let mut total: i64 = api.ups().users.values().map(|p| p.account(USD)).sum();
     total += api.adjustments(USD);
@@ -142,7 +138,6 @@ fn assert_conserved_usd(api: &ExchangeApi) {
     assert_eq!(total, 0, "futures global conservation broken: USD total={total}");
 }
 
-// hedge 模式下按方向（LONG/SHORT）取出对应的独立仓位腿
 fn hedge_leg(api: &ExchangeApi, uid: i64, symbol: i32, dir: PositionDirection) -> Option<&SymbolPositionRecord> {
     api.ups()
         .get(uid)?
@@ -151,7 +146,6 @@ fn hedge_leg(api: &ExchangeApi, uid: i64, symbol: i32, dir: PositionDirection) -
         .find(|p| p.symbol == symbol && p.direction == dir)
 }
 
-// hedge 模式下把该用户在该 symbol 上所有腿的 open_volume 相加（用于校验平仓后归零）
 fn hedge_open_volume_sum(api: &ExchangeApi, uid: i64, symbol: i32) -> i64 {
     api.ups()
         .get(uid)
@@ -159,7 +153,6 @@ fn hedge_open_volume_sum(api: &ExchangeApi, uid: i64, symbol: i32) -> i64 {
         .unwrap_or(0)
 }
 
-// 对应 Java testFuturesGtcMakerTakerFeeCalculation：GTC maker 挂单 + GTC taker 吃单，验证 maker/taker 手续费金额及账户扣费
 #[test]
 fn futures_gtc_maker_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -193,7 +186,6 @@ fn futures_gtc_maker_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesIocTakerFeeCalculation：IOC taker 吃单场景下的 taker 手续费计算
 #[test]
 fn futures_ioc_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -220,7 +212,6 @@ fn futures_ioc_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 开仓后再反向平仓一轮，校验不同 taker 单类型下 maker/taker 各自的账户余额与全局 fees 是否一致
 fn run_per_user_balance(taker_type: OrderType) {
     const MAKER: i64 = 9001;
     const TAKER: i64 = 9002;
@@ -253,7 +244,6 @@ fn run_per_user_balance(taker_type: OrderType) {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesPerUserBalanceAcrossOrderTypes：对 GTC/IOC/FOK_BUDGET/IOC_BUDGET 四种 taker 单类型分别跑一遍
 #[test]
 fn futures_per_user_balance_across_order_types() {
     run_per_user_balance(OrderType::Gtc);
@@ -262,7 +252,6 @@ fn futures_per_user_balance_across_order_types() {
     run_per_user_balance(OrderType::IocBudget);
 }
 
-// 充值 -> 开平仓收费 -> 提现清零的完整生命周期，校验 adjustments/fees 净额与全局守恒
 fn run_full_lifecycle(taker_type: OrderType) {
     const MAKER: i64 = 9201;
     const TAKER: i64 = 9202;
@@ -307,7 +296,6 @@ fn run_full_lifecycle(taker_type: OrderType) {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesFullLifecycleWithDepositWithdraw：对四种 taker 单类型分别跑一遍完整生命周期
 #[test]
 fn futures_full_lifecycle_with_deposit_withdraw() {
     run_full_lifecycle(OrderType::Gtc);
@@ -316,7 +304,6 @@ fn futures_full_lifecycle_with_deposit_withdraw() {
     run_full_lifecycle(OrderType::IocBudget);
 }
 
-// 对应 Java testFuturesExtraMarginFullLifecycleConservation：逐仓追加保证金 -> 平仓退回 -> 提现清零，全程校验全局守恒
 #[test]
 fn futures_extra_margin_full_lifecycle_conservation() {
     const TAKER: i64 = 9701;
@@ -371,7 +358,6 @@ fn futures_extra_margin_full_lifecycle_conservation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesPositionClosingFeeCalculation：先开仓再部分平仓，校验平仓段单独产生的 maker/taker 手续费
 #[test]
 fn futures_position_closing_fee_calculation() {
     const MAKER: i64 = 1;
@@ -409,7 +395,6 @@ fn futures_position_closing_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testDynamicFeeCalculationAccuracy：纯公式校验，多档 size 下动态费率的 maker/taker 计算结果
 #[test]
 fn dynamic_fee_calculation_accuracy() {
     let price = 50_000i64;
@@ -421,7 +406,6 @@ fn dynamic_fee_calculation_accuracy() {
     }
 }
 
-// 对应 Java testDynamicFeeTradingWithEthSymbol：用 ETH 合约（不同费率参数）实盘下单验证动态费率生效
 #[test]
 fn dynamic_fee_trading_with_eth_symbol() {
     const MAKER: i64 = 1;
@@ -453,7 +437,6 @@ fn dynamic_fee_trading_with_eth_symbol() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesMakerOneToManyFeeCalculation：一个 maker 大单被三个 taker 分别吃掉，校验 maker 手续费按各笔累加
 #[test]
 fn futures_maker_one_to_many_fee_calculation() {
     const MAKER: i64 = 1;
@@ -487,7 +470,6 @@ fn futures_maker_one_to_many_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesTakerOneToManyFeeCalculation：一个 taker 大单依次吃掉三个不同价位的 maker，校验按各笔成交价分别计费
 #[test]
 fn futures_taker_one_to_many_fee_calculation() {
     const M1: i64 = 1;
@@ -519,7 +501,6 @@ fn futures_taker_one_to_many_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesMixedOrderTypesFeeCalculation：两个 GTC maker + 一个 GTC taker + 一个 IOC taker 混合撮合下的费用计算
 #[test]
 fn futures_mixed_order_types_fee_calculation() {
     const M1: i64 = 1;
@@ -553,7 +534,6 @@ fn futures_mixed_order_types_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesFokBudgetTakerFeeCalculation：FOK_BUDGET taker 按预算全额成交时的手续费计算
 #[test]
 fn futures_fok_budget_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -577,7 +557,6 @@ fn futures_fok_budget_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesIocBudgetFullFillTakerFeeCalculation：IOC_BUDGET taker 按预算全额成交时的手续费计算
 #[test]
 fn futures_ioc_budget_full_fill_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -601,7 +580,6 @@ fn futures_ioc_budget_full_fill_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesIocBudgetPartialFillTakerFeeCalculation：IOC_BUDGET taker 因预算不足只部分成交，费用只按实际成交量计算
 #[test]
 fn futures_ioc_budget_partial_fill_taker_fee_calculation() {
     const MAKER: i64 = 1;
@@ -631,7 +609,6 @@ fn futures_ioc_budget_partial_fill_taker_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesFeeCalculationParameters：用非整数价格校验手续费计算参数的正确性
 #[test]
 fn futures_fee_calculation_parameters() {
     const MAKER: i64 = 1;
@@ -655,7 +632,6 @@ fn futures_fee_calculation_parameters() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesMakerOneToManyPartialFillFeeConsistency：maker 大单被多笔部分成交吃掉时，全局 fees 应等于逐笔 maker+taker 之和
 #[test]
 fn futures_maker_one_to_many_partial_fill_fee_consistency() {
     const MAKER: i64 = 1;
@@ -690,7 +666,6 @@ fn futures_maker_one_to_many_partial_fill_fee_consistency() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesTakerOneToManyPartialFillFeeConsistency：taker 大单依次吃掉多个不同价位 maker，全局 fees 应等于逐笔 maker+taker 之和
 #[test]
 fn futures_taker_one_to_many_partial_fill_fee_consistency() {
     const M1: i64 = 1;
@@ -726,7 +701,6 @@ fn futures_taker_one_to_many_partial_fill_fee_consistency() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesReverseOpeningFeeCalculation：反手开仓（平掉原 LONG 同时反向开出更大的 SHORT），校验平仓段已实现盈亏与新开仓段手续费
 #[test]
 fn futures_reverse_opening_fee_calculation() {
     const U1: i64 = 1;
@@ -770,7 +744,6 @@ fn futures_reverse_opening_fee_calculation() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testHedgeModePositionOpeningFeeEvents：hedge 模式下同一用户同时开 LONG 与 SHORT 两条独立腿，各自按 maker 手续费计费
 #[test]
 fn hedge_mode_position_opening_fee_events() {
     const USER: i64 = 1;
@@ -805,7 +778,6 @@ fn hedge_mode_position_opening_fee_events() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testHedgeModePartialClosingFeeEvents：hedge 模式下部分平掉 LONG 腿，SHORT 腿不受影响，校验平仓段手续费
 #[test]
 fn hedge_mode_partial_closing_fee_events() {
     const USER: i64 = 1;
@@ -861,7 +833,6 @@ fn hedge_mode_partial_closing_fee_events() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testHedgeModePositionReversalFeeEvents：hedge 模式下 LONG 腿全平后拆除，同时开出新的 SHORT 腿，校验相关手续费
 #[test]
 fn hedge_mode_position_reversal_fee_events() {
     const USER: i64 = 1;
@@ -913,7 +884,6 @@ fn hedge_mode_position_reversal_fee_events() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testHedgeModeMixedOrderTypesFeeEvents：hedge 模式下 GTC 开仓后，IOC 单因无对手盘未成交，不应产生新手续费
 #[test]
 fn hedge_mode_mixed_order_types_fee_events() {
     const USER: i64 = 1;
@@ -952,7 +922,6 @@ fn hedge_mode_mixed_order_types_fee_events() {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testHedgeModeFeeConsistencyWithGlobalBalance：hedge 模式双向开仓后，全局 fees 与全局余额守恒均应成立
 #[test]
 fn hedge_mode_fee_consistency_with_global_balance() {
     const USER: i64 = 1;
@@ -985,7 +954,6 @@ fn hedge_mode_fee_consistency_with_global_balance() {
     assert_conserved_usd(&api);
 }
 
-// hedge 模式下开 LONG+SHORT 两条腿再依次平掉、提现清零的完整生命周期，校验各阶段全局守恒
 fn run_hedge_full_lifecycle(taker_type: OrderType) {
     const MAKER: i64 = 9401;
     const TAKER: i64 = 9402;
@@ -1038,7 +1006,6 @@ fn run_hedge_full_lifecycle(taker_type: OrderType) {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesHedgeFullLifecycleWithDepositWithdraw：对四种 taker 单类型分别跑一遍 hedge 完整生命周期
 #[test]
 fn futures_hedge_full_lifecycle_with_deposit_withdraw() {
     run_hedge_full_lifecycle(OrderType::Gtc);
@@ -1047,7 +1014,6 @@ fn futures_hedge_full_lifecycle_with_deposit_withdraw() {
     run_hedge_full_lifecycle(OrderType::IocBudget);
 }
 
-// 逐仓 + hedge 模式下开 LONG+SHORT 两条独立腿（各自独立保证金）再平仓、提现清零的完整生命周期
 fn run_isolated_hedge_full_lifecycle(taker_type: OrderType) {
     const MAKER: i64 = 9601;
     const TAKER: i64 = 9602;
@@ -1107,7 +1073,6 @@ fn run_isolated_hedge_full_lifecycle(taker_type: OrderType) {
     assert_conserved_usd(&api);
 }
 
-// 对应 Java testFuturesIsolatedHedgeFullLifecycleWithDepositWithdraw：对四种 taker 单类型分别跑一遍逐仓 hedge 完整生命周期
 #[test]
 fn futures_isolated_hedge_full_lifecycle_with_deposit_withdraw() {
     run_isolated_hedge_full_lifecycle(OrderType::Gtc);

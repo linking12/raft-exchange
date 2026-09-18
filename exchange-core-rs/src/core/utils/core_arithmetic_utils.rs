@@ -1,13 +1,3 @@
-//! 对应 Java `exchange.core2.core.utils.CoreArithmeticUtils`（另见同目录 `CoreArithmeticUtils.md` 设计文档）。
-//! 撮合内核的定点算术工具：金额/价格/手续费/强平数量一律用 `i64` 定点表示，不用浮点，保证跨节点逐字节可复现（raft 一致性前提）。
-//!
-//! 与 Java 版的关键差异：Java 因为没有原生 128-bit 整数，`ceilMulDiv`/`truncMulDiv` 做成 fast path（`Math.multiplyExact`
-//! 分块估算，命中率 99.9%）+ slow path（`ceilMulDiv128`/`truncMulDiv128` 手写 128-bit 长除，逐位 shift）的 hybrid 结构，
-//! 靠 try/catch `ArithmeticException` 切换两条路径以保证 hot path 性能。Rust 原生支持 `i128`，本文件对应的
-//! `ceil_mul_div`/`trunc_mul_div`/`ceil_mul_mul_div` 直接把乘积算到 `i128` 上做除法（见 `ceil_div_i128`），
-//! 无需手写长除、也无需 fast/slow 两条路径——语义与 Java 两条路径合并后的结果一致，但实现更简单。
-
-/// 对应 Java `TenPowers` 的查表常量：`10^0..10^18` 预计算表，供 `pow10`/`log10` O(1) 查表，避免运行时幂运算。
 const POW10: [i64; 19] = [
     1,
     10,
@@ -30,13 +20,10 @@ const POW10: [i64; 19] = [
     1_000_000_000_000_000_000,
 ];
 
-/// 对应 Java `TenPowers.pow10`：O(1) 查表返回 `10^n`。
 fn pow10(n: u32) -> i64 {
     POW10[n as usize]
 }
 
-/// 对应 Java `TenPowers.log10`：反查 `x` 在 `POW10` 表中的下标（要求 `x` 必须是 10 的整数幂，
-/// 这是 spec 里所有 scaleK 字段的构造期不变量，非法输入说明上游 spec 配置有 bug）。
 fn log10(x: i64) -> i32 {
     match POW10.iter().position(|&p| p == x) {
         Some(idx) => idx as i32,
@@ -44,28 +31,21 @@ fn log10(x: i64) -> i32 {
     }
 }
 
-/// 对应 Java `Math.multiplyExact(long, long)`：i64 精确乘法，借道 i128 检测溢出后立即 panic
-/// （Java 侧抛 `ArithmeticException`，语义等价，都是"让调用方在上层显式感知溢出"而非静默 wrap）。
 pub(crate) fn mul_exact(a: i64, b: i64) -> i64 {
     let product = a as i128 * b as i128;
     i64::try_from(product).unwrap_or_else(|_| panic!("overflow: {a} * {b}"))
 }
 
-/// 对应 Java `Math.addExact(long, long)`。
 pub(crate) fn add_exact(a: i64, b: i64) -> i64 {
     let sum = a as i128 + b as i128;
     i64::try_from(sum).unwrap_or_else(|_| panic!("overflow: {a} + {b}"))
 }
 
-/// 对应 Java `Math.subtractExact(long, long)`。
 pub(crate) fn sub_exact(a: i64, b: i64) -> i64 {
     let diff = a as i128 - b as i128;
     i64::try_from(diff).unwrap_or_else(|_| panic!("overflow: {a} - {b}"))
 }
 
-/// `i128` 精度上的向上取整除法：`⌈n/d⌉`。是 Rust 版 `ceil_mul_div`/`trunc_mul_div` 用来合并
-/// Java `ceilMulDiv` fast path 与 `ceilMulDiv128` slow path 语义的公共内核——直接在 128-bit 上做一次
-/// 除法即可覆盖 Java 两条路径共同处理的所有取值范围，取整规则见 5.2 节代数证明（正负余数分别处理）。
 fn ceil_div_i128(n: i128, d: i128) -> i128 {
     assert!(d != 0, "division by zero");
     let q = n / d;
@@ -77,34 +57,22 @@ fn ceil_div_i128(n: i128, d: i128) -> i128 {
     }
 }
 
-/// 把 128-bit 中间结果收窄回 `i64`；对应 Java `ceilMulDiv128`/`truncMulDiv128` 结尾处"结果必须能表示为 signed long"的前提假设，
-/// 这里显式 panic 而不是像 Java 那样静默截断到低 64 bit。
 fn narrow_i128(v: i128, ctx: &str) -> i64 {
     i64::try_from(v).unwrap_or_else(|_| panic!("overflow narrowing to i64: {ctx} = {v}"))
 }
 
-/// 对应 Java `CoreArithmeticUtils.ceilMulDiv(a, b, c)`：计算 `⌈(a×b)/c⌉`，用于手续费等"平台不少收"的取整方向
-/// （见 CoreArithmeticUtils.md §3.2）。前提同 Java：`a >= 0`，`c > 0`，`b` 可正可负（maker rebate 场景）。
-/// Java 版先走分块 fast path，溢出再 fallback 到 128-bit 长除；这里统一走 i128 乘法+`ceil_div_i128`，结果等价。
 pub fn ceil_mul_div(a: i64, b: i64, c: i64) -> i64 {
     assert!(c > 0, "c must be positive: {c}");
     let product = a as i128 * b as i128;
     narrow_i128(ceil_div_i128(product, c as i128), "ceil_mul_div")
 }
 
-/// 对应 Java `CoreArithmeticUtils.truncMulDiv(a, b, c)`：计算 `(a×b)/c`（向零截断），用于缺口估算等
-/// "对系统保守"的取整方向（见 CoreArithmeticUtils.md §3.3）。`a`、`b`、`c` 任意符号，`c != 0`。
 pub fn trunc_mul_div(a: i64, b: i64, c: i64) -> i64 {
     assert!(c != 0, "division by zero");
     let product = a as i128 * b as i128;
     narrow_i128(product / c as i128, "trunc_mul_div")
 }
 
-/// 对应 Java `CoreArithmeticUtils.ceilMulMulDiv(a, b, c, d)`：计算 `⌈(a×b×c)/d⌉`，覆盖
-/// `size × price × fee / feeScaleK` 这类四操作数手续费公式。Java 版先试 `a*b` 是否溢出 i64，
-/// 溢出则重排成 `a × (b*c) / d` 再 fallback。这里同样保留"先试 a*b，再退化到 b*c"的两段式，
-/// 但每段内部改用 `ceil_mul_div`（i128 实现），不是为了避免溢出（i128 早已够用），
-/// 而是保留与 Java 一致的重排顺序以便审计对拍。
 pub fn ceil_mul_mul_div(a: i64, b: i64, c: i64, d: i64) -> i64 {
     let ab = a as i128 * b as i128;
     if let Ok(ab_i64) = i64::try_from(ab) {
@@ -117,14 +85,10 @@ pub fn ceil_mul_mul_div(a: i64, b: i64, c: i64, d: i64) -> i64 {
     }
 }
 
-/// 对应 Java `CoreArithmeticUtils.ceilDivide(dividend, divisor)`：向上取整整除，`divisor > 0`。
-/// 用整数运算规避浮点 `Math.ceil`，结果逐位可复现。
 pub fn ceil_divide(dividend: i64, divisor: i64) -> i64 {
     dividend / divisor + if dividend % divisor == 0 { 0 } else { 1 }
 }
 
-/// 对应 Java `CoreArithmeticUtils.convertScale`（私有 helper）：在两个都是 10 的整数幂的 scale 之间转换。
-/// `from_k > to_k`（缩小）走除法截断，`from_k < to_k`（放大）走乘法（溢出 panic，对应 Java `multiplyExact`）。
 pub fn convert_scale(amount: i64, from_k: i64, to_k: i64) -> i64 {
     if from_k == to_k {
         return amount;
@@ -138,9 +102,6 @@ pub fn convert_scale(amount: i64, from_k: i64, to_k: i64) -> i64 {
     }
 }
 
-/// 对应 Java `CoreArithmeticUtils.sizePriceToCurrencyScale`：撮合内部乘积单位（`baseScaleK × quoteScaleK`）
-/// 换算到 currency 记账单位。Java 版接收 `CoreSymbolSpecification`/`CoreCurrencySpecification` 对象，
-/// 这里直接接收拆开的 scaleK 值，去掉了对 spec 结构体的依赖。
 pub fn size_price_to_currency_scale(
     amount: i64,
     base_scale_k: i64,
@@ -150,8 +111,6 @@ pub fn size_price_to_currency_scale(
     convert_scale(amount, mul_exact(base_scale_k, quote_scale_k), currency_scale_k)
 }
 
-/// 对应 Java `CoreArithmeticUtils.currencyToSizePriceScale`：反方向，currency 记账单位换算到撮合内部乘积单位
-/// （例如预算单 `budgetInSteps` 进撮合前的换算）。
 pub fn currency_to_size_price_scale(
     amount: i64,
     base_scale_k: i64,
@@ -161,27 +120,18 @@ pub fn currency_to_size_price_scale(
     convert_scale(amount, currency_scale_k, mul_exact(base_scale_k, quote_scale_k))
 }
 
-/// 对应 Java `CoreArithmeticUtils.symbolToCurrencyScale`：symbol 交易单位（base 或 quote 各自的 scaleK）换算到
-/// currency 记账单位。Java 版按 `currency.id` 判断走 base 还是 quote scaleK 并在不匹配时抛
-/// `IllegalArgumentException`；这里把"选哪个 scaleK"交由调用方决定，直接传入已选定的 `scale_k`。
 pub fn symbol_to_currency_scale(amount: i64, scale_k: i64, currency_scale_k: i64) -> i64 {
     convert_scale(amount, scale_k, currency_scale_k)
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateAmountAsk`：ask 单冻结 base 资产直接等于 size，
-/// 无需换算也无需算 fee（fee 从对手 quote 端收）。
 pub fn calculate_amount_ask(size: i64) -> i64 {
     size
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateAmountBid`：bid 单裸交易额 = size × price（内部乘积单位）。
 pub fn calculate_amount_bid(size: i64, price: i64) -> i64 {
     mul_exact(size, price)
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateTakerFee`：taker 手续费。`fee_scale_k == 0` 表示固定费率
-/// （对应 Java `spec.isFixedFee()`），否则按 `⌈size × price × taker_fee / fee_scale_k⌉` 比例收取，取整方向 ceil
-/// （平台不少收，见 CoreArithmeticUtils.md §3.2/§3.4 守恒闭环示例）。
 pub fn calculate_taker_fee(size: i64, price: i64, taker_fee: i64, fee_scale_k: i64) -> i64 {
     if fee_scale_k == 0 {
         mul_exact(size, taker_fee)
@@ -190,8 +140,6 @@ pub fn calculate_taker_fee(size: i64, price: i64, taker_fee: i64, fee_scale_k: i
     }
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateMakerFee`：maker 手续费，公式与 taker 对称但 `maker_fee`
-/// 可为负（rebate 模式，负值表示平台倒贴挂单方）。
 pub fn calculate_maker_fee(size: i64, price: i64, maker_fee: i64, fee_scale_k: i64) -> i64 {
     if fee_scale_k == 0 {
         mul_exact(size, maker_fee)
@@ -200,9 +148,6 @@ pub fn calculate_maker_fee(size: i64, price: i64, maker_fee: i64, fee_scale_k: i
     }
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateAmountBidTakerFee`：bid 下单前按 taker 费率冻结的总额
-/// = 本金 + taker 手续费。之所以下单先按（通常更贵的）taker 费率冻结上限，是因为下单时还不知道最终会以
-/// taker 还是 maker 身份成交；多冻结的部分在真正以 maker 价成交后通过 `calculate_amount_bid_release_corr_maker` 退回。
 pub fn calculate_amount_bid_taker_fee(
     size: i64,
     price: i64,
@@ -214,9 +159,6 @@ pub fn calculate_amount_bid_taker_fee(
     add_exact(trade_amount, fee)
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget`：预算单（用户以金额而非 size×price 下单，
-/// 如现货市价按金额买入）的冻结总额 = 预算金额 + 手续费。变动费率按 budget 本身而非 size×price 计费，
-/// 避免和"预算已经是金额"重复相乘。
 pub fn calculate_amount_bid_taker_fee_for_budget(
     size: i64,
     budget_in_steps: i64,
@@ -232,10 +174,6 @@ pub fn calculate_amount_bid_taker_fee_for_budget(
     add_exact(budget_amount, fee)
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateAmountBidReleaseCorrMaker`：订单最终以更优的 maker 价成交后，
-/// 计算应退还给买方的差额 = 本金差（冻结价 - 实际成交价）+ 手续费差（按冻结时 taker 费率多收的部分）。
-/// `inner_numer` 可能为负（maker rebate 场景），`ceil_mul_div` 的 `b` 参数天然支持负值，
-/// 详细推导及资金守恒闭环示例见 Java CoreArithmeticUtils.md §3.4。
 pub fn calculate_amount_bid_release_corr_maker(
     size: i64,
     hold_price: i64,
@@ -248,8 +186,7 @@ pub fn calculate_amount_bid_release_corr_maker(
     let fee_diff = if fee_scale_k == 0 {
         mul_exact(size, sub_exact(taker_fee, maker_fee))
     } else {
-        // 内层两次乘法用 mul_exact 提前发现异常量级输入；外层按 ceil 取整与冻结侧对称，
-        // 是资金闭环成立的关键（冻结用 ceil 多收，退款也必须用 ceil 多退）
+
         let inner_numer = sub_exact(
             mul_exact(hold_price, taker_fee),
             mul_exact(trade_price, maker_fee),
@@ -259,22 +196,17 @@ pub fn calculate_amount_bid_release_corr_maker(
     add_exact(trade_amount_diff, fee_diff)
 }
 
-/// 对应 Java `CoreArithmeticUtils.isAskPriceTooLow`：ask 挂单前的预检——若卖出所得连手续费都不够覆盖，直接拒单。
-/// 理论判据是 `price × taker_fee < fee_scale_k`，但该乘积可能溢出，故等价改写为 `price < ⌈fee_scale_k / taker_fee⌉`
-/// 规避溢出（分母用 ceil 取整让判据更严格，宁可多拒单也不能让手续费收不抵支）。
 pub fn is_ask_price_too_low(price: i64, taker_fee: i64, fee_scale_k: i64) -> bool {
     if fee_scale_k == 0 {
         return price < taker_fee;
     }
-    // taker_fee == 0 是免手续费配置，不存在"价格过低导致收不到手续费"的问题
+
     if taker_fee == 0 {
         return false;
     }
     price < ceil_divide(fee_scale_k, taker_fee)
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateLiquidationFee`：强平订单的额外清算惩罚费用，公式与 taker fee 对称，
-/// 是在 taker fee 之外叠加的独立扣费（业务上恒非负，不同于 maker fee 可以是 rebate）。
 pub fn calculate_liquidation_fee(size: i64, price: i64, liquidation_fee: i64, fee_scale_k: i64) -> i64 {
     if fee_scale_k == 0 {
         mul_exact(size, liquidation_fee)
@@ -283,10 +215,6 @@ pub fn calculate_liquidation_fee(size: i64, price: i64, liquidation_fee: i64, fe
     }
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateSizeToLiquidate`：求使权益恰好回到维持保证金线所需的最小强平手数 x。
-/// 公式推导见 Java CoreArithmeticUtils.md §7.3（由 `equity - maintenance_margin - ΔIM - ΔPnl ≥ 0` 解出 x），
-/// 取整方向为 ceil——少强平一手可能留下未覆盖风险。`denominator` 在 SHORT 仓（`sign = -1`）时可能变号，
-/// 由调用方（风控引擎）保证传入值处于合法业务范围。
 pub fn calculate_size_to_liquidate(
     equity: i64,
     maintenance_margin: i64,
@@ -302,9 +230,6 @@ pub fn calculate_size_to_liquidate(
     ceil_divide(numerator, denominator)
 }
 
-/// 对应 Java `CoreArithmeticUtils.calculateDeficitAfterLiquidate`：预估强平 x 手后总缺口（维持保证金 - 权益）
-/// 的变化量。取整方向刻意用 `ceil_mul_div`（对"改善量"取更大值再被减去，相当于保守低估改善），
-/// 避免风控引擎误判"已经平够了"而漏掉后续强平，推导见 Java CoreArithmeticUtils.md §7.3。
 pub fn calculate_deficit_after_liquidate(
     size: i64,
     sign: i64,
@@ -321,11 +246,6 @@ pub fn calculate_deficit_after_liquidate(
 }
 
 use std::collections::BTreeMap;
-
-/// Rust 版新增工具，Java `CoreArithmeticUtils` 无对应方法：按权重把 `total` 整数金额按比例分配到各 key，
-/// 用 `trunc_mul_div` 逐 key 算出份额后，把截断产生的余数（dust）按 key 升序逐个 +1 分配，
-/// 保证分配总额恒等于 `total`（无 dust 泄漏）且结果对给定输入确定性可复现。当前用于资金费按 shard/receiver
-/// 维度拆分总额（见 `funding_fee_command_processor` 的调用）。
 
 pub fn distribute_remainder_by_one<K: Ord + Copy>(total: i64, weights: &BTreeMap<K, i64>) -> BTreeMap<K, i64> {
     let mut result: BTreeMap<K, i64> = BTreeMap::new();
@@ -912,9 +832,6 @@ mod tests {
         assert_eq!(distribute_remainder_by_one(999, &weights), BTreeMap::from([(42, 999)]));
     }
 
-    // 对拍 Java 测试用例：数值直接照搬 Java exchange-core 的
-    // CoreArithmeticUtilsTest / CoreArithmeticUtilsScaleTest（方法名保留 camelCase 便于对照 Java 侧），
-    // 用于验证 Rust 移植与 Java 原实现逐值一致，不是独立设计的新用例。
     #[allow(non_snake_case)]
     mod java_parity {
     use super::super::*;

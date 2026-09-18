@@ -1,13 +1,3 @@
-//! 对应 Java `exchange.core2.core.processors.LoanRatePricingCommandProcessor`。
-//!
-//! REPRICE_LOAN_RATES 命令的两步处理器：按各币种借贷池的全局利用率（utilization）重新给浮动利率定价。
-//! `collect` 读出借贷池的 borrowed/available 快照并算出每币种的利用率 bps（对应 Java R1
-//! `collectInput` 写本地池数据 + matcher stage `buildMatcherEvents` 跨 shard 求和算 util 的合并；
-//! Rust 单实例无 shard，直接对单份池数据求值，无需跨 shard 汇总）；`apply` 把每个币种的浮动利率推进
-//! 累加器后按新利用率过曲线重定价（对应 Java R2 `applyEvent`）。
-//! `collect_input` 复用同一张 map 存 borrowed/available 两侧数据，靠 key 符号区分：
-//! borrowed 存在 key = currency（≥0），available 存在 key = `!currency`（按位取反，恒为负）。
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::common::cmd::command_result_code::CommandResultCode;
@@ -16,21 +6,16 @@ use crate::core::processors::loan::loan_service::LoanService;
 use crate::core::processors::loan::rate::floating_rate_model::FloatingRateModel;
 use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 
-/// 无状态标记类型，方法均为纯函数式的 `&self` 调用。
 pub struct LoanRatePricingCommandProcessor;
 
 impl TwoStepCommandProcessor for LoanRatePricingCommandProcessor {
-    /// 对应 Java `collectInput` + matcher stage `buildMatcherEvents` 的合并：读出借贷池数据、按币种算
-    /// 出利用率 bps，写回 `cmd.loan_reprice_events`（`(currency, util_bps)` 列表，按 currency 升序——
-    /// 跨副本确定性）。
+
     fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
         let shard_data = Self::collect_input(&ctx.risk.loan_service);
         cmd.loan_reprice_events = Self::build_matcher_events(&[shard_data]);
         CommandResultCode::Success
     }
 
-    /// 对应 Java R2 `applyEvent`（逐事件循环）：为每个币种先把浮动利率累加器按旧利率推进到当前
-    /// timestamp（结清旧区间），再用新算出的利用率过曲线写生效利率；最后记录本次重定价的时间戳。
     fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
         let events = std::mem::take(&mut cmd.loan_reprice_events);
         if events.is_empty() {
@@ -44,7 +29,7 @@ impl TwoStepCommandProcessor for LoanRatePricingCommandProcessor {
 }
 
 impl LoanRatePricingCommandProcessor {
-    /// 对应 Java `collectInput`：把借贷池的 borrowed/available 两张表编码进同一张 map（零值跳过）。
+
     fn collect_input(loan_service: &LoanService) -> BTreeMap<i32, i64> {
         let mut shard_data = BTreeMap::new();
         for (&currency, &v) in &loan_service.loan_pool_borrowed {
@@ -60,9 +45,6 @@ impl LoanRatePricingCommandProcessor {
         shard_data
     }
 
-    /// 对应 Java matcher stage `buildMatcherEvents`：把（可能来自多个 shard 的）编码 map 拆回
-    /// borrowed/available 两张汇总表，按 currency 升序算出每币种利用率 bps。Rust 单实例通常只传入单元素
-    /// 切片，但签名保留切片形式以对齐 Java 跨 shard 求和的语义。
     fn build_matcher_events(shard_data: &[BTreeMap<i32, i64>]) -> Vec<(i32, i64)> {
         let mut total_borrowed: BTreeMap<i32, i64> = BTreeMap::new();
         let mut total_available: BTreeMap<i32, i64> = BTreeMap::new();
@@ -89,8 +71,6 @@ impl LoanRatePricingCommandProcessor {
             .collect()
     }
 
-    /// 对应 Java R2 `applyEvent` 内的单币种重定价逻辑：先推进累加器（结清旧利率区间），再写新利率。
-    /// 调用顺序不能反——先 advance 后 reprice，否则旧区间会被误按新利率结算。
     fn apply_event(loan_service: &mut LoanService, currency: i32, util_bps: i64, tick_ts: i64) {
         loan_service.floating_rate.advance_accumulator(currency, tick_ts);
         loan_service.floating_rate.reprice_currency(currency, util_bps);

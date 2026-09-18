@@ -1,9 +1,3 @@
-//! 对应 Java 测试类 `ITLoanDynamicRate.java` 的移植：验证动态利率端到端链路——
-//! ① `ADD_LOAN` 的 rateCurve 配置流到开仓利率（FLOATING = 曲线 base，LOCKED = base + lockedAdjust）；
-//! ② `REPRICE_LOAN_RATES` 把池利用率经 kinked 曲线写进 `currentRateBps`，后续新 FLOATING 贷款按新曲线值开仓；
-//! ③ 非法的 rateCurve / symbol 配置被静默跳过，不覆盖既有的 good 配置；
-//! ④ `ofMarket` 派生阈值、`ofRateCurvePreset` 预设曲线在借款开仓时被实际强制执行。
-
 #[cfg(test)]
 mod tests {
     use exchange_core_rs::core::common::last_price_cache_record::LastPriceCacheRecord;
@@ -136,8 +130,6 @@ mod tests {
         }
     }
 
-    // 搭建带贷款配置的现货 symbol：good symbol loanConfig + numeraire=USDT + rateCurve(base, locked_adjust)，
-    // 池子注资 POOL_FUND，借款人预存 300 BTC 抵押。
     fn boot(base: i32, locked_adjust: i32) -> ExchangeCore {
         let mut core = ExchangeCore::new();
         core.ssp.add_currency(CoreCurrencySpecification { currency: BTC, currency_scale_k: 1, ..Default::default() });
@@ -173,8 +165,6 @@ mod tests {
             .rate_bps
     }
 
-    // 对应 Java rateCurveConfig_flowsToOpenRate()：未 reprice 时 FLOATING 开仓率回退曲线 base，
-    // LOCKED 开仓率 = base + lockedAdjust。
     #[test]
     fn rate_curve_config_flows_to_open_rate() {
         let mut core = boot(300, 50);
@@ -184,8 +174,6 @@ mod tests {
         assert_eq!(loan_rate_bps(&core, 2), 350, "LOCKED open rate = base + lockedAdjust");
     }
 
-    // 对应 Java reprice_utilizationToCurve_updatesNextFloatingOpenRate()：REPRICE_LOAN_RATES 把池利用率
-    // 经 kinked 曲线写入 currentRateBps 后，之后新建的 FLOATING 贷款按新曲线值开仓。
     #[test]
     fn reprice_utilization_to_curve_updates_next_floating_open_rate() {
         let mut core = boot(200, 0);
@@ -200,8 +188,6 @@ mod tests {
         assert_eq!(loan_rate_bps(&core, 2), 240, "new FLOATING rate after reprice = curve(util) = 240");
     }
 
-    // 对应 Java rateCurveConfig_invalidRejected_keepsGoodCurve()：非法曲线（kink 越界）被 RiskEngine dispatch
-    // 静默跳过，既有 good 曲线（base=300 / base+adjust=350）原样保留，不被哨兵值 999 覆盖。
     #[test]
     fn rate_curve_config_invalid_rejected_keeps_good_curve() {
         let mut core = boot(300, 50);
@@ -213,8 +199,6 @@ mod tests {
         assert_eq!(loan_rate_bps(&core, 2), 350, "invalid curve skipped: LOCKED rate stays at good base+adjust=350");
     }
 
-    // 对应 Java symbolConfig_invalidRejected_keepsGoodConfig()：非法 symbol 配置（liquidation ≤ initial）
-    // 被静默跳过，既有 good 配置（含 loanMaxAmount=MAX）原样保留，大额借款仍能正常开仓。
     #[test]
     fn symbol_config_invalid_rejected_keeps_good_config() {
         let mut core = boot(300, 50);
@@ -224,8 +208,6 @@ mod tests {
         assert_eq!(loan_rate_bps(&core, 1), 300, "invalid symbol config skipped: loan opens normally under good config, rate = curve base=300");
     }
 
-    // 对应 Java ofMarket_derivesThresholds_borrowRespectsDerivedInitialLtv()：ofMarket 只设 initialLtv，
-    // 其余阈值走派生，借款在派生出的 initialLtv 上限内应成功。
     #[test]
     fn of_market_derives_thresholds_borrow_respects_derived_initial_ltv() {
         let mut core = boot(200, 0);
@@ -233,7 +215,6 @@ mod tests {
         assert_eq!(create_loan(&mut core, 50, 50, 2_900_000, true), CommandResultCode::Success);
     }
 
-    // 对应 Java ofMarket_borrowAboveDerivedInitialLtv_rejected()：借款超过派生出的 initialLtv 上限被拒绝。
     #[test]
     fn of_market_borrow_above_derived_initial_ltv_rejected() {
         let mut core = boot(200, 0);
@@ -241,8 +222,6 @@ mod tests {
         assert_eq!(create_loan(&mut core, 51, 51, 3_100_000, true), CommandResultCode::LoanLtvTooHigh);
     }
 
-    // 对应 Java ofRateCurvePreset_standard_floatingOpensAtPresetBase()：用 STANDARD 预设覆盖既有的
-    // 非标曲线（base=999）后，新开的 FLOATING 贷款按预设 base=200 开仓。
     #[test]
     fn of_rate_curve_preset_standard_floating_opens_at_preset_base() {
         let mut core = boot(999, 0);

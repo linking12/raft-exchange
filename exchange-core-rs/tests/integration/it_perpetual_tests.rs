@@ -1,7 +1,3 @@
-//! 对应 Java 测试类 `ITPerpetualContractIntegration.java` 的移植：验证 SettleFundingFees /
-//! SettlePnl 两类结算命令的 symbol 类型校验，以及交割合约（delivery）和永续合约（perpetual）
-//! 在资金费结算（funding fee）、PnL 结算（delivery settlement）、强平（liquidation）全生命周期下
-//! 仓位与账户余额的正确性。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -128,9 +124,6 @@ mod tests {
         })
     }
 
-    // 对应 Java testInvalidSymbol() 场景：SettleFundingFees 命令发到非永续（delivery）symbol
-    // 应报 InvalidSymbol；发到永续 symbol 但尚无 mark price 时报 RiskMarkpriceNotAvailable；
-    // 设置 mark price 后同一命令才能成功。
     #[test]
     fn invalid_symbol_settle_funding_fees_guards() {
         let mut api = ExchangeApi::new();
@@ -153,8 +146,6 @@ mod tests {
         assert_eq!(settle_funding_fees(&mut api, 10000, OrderAction::Bid, 33, 100, 1003), CommandResultCode::Success);
     }
 
-    // 对应 Java testInvalidSymbol2() 场景：SettlePnl 命令发到永续 symbol 应报 InvalidSymbol
-    // （PnL 结算只适用于交割合约），发到 delivery symbol 才能成功。
     #[test]
     fn invalid_symbol_settle_pnl_guards() {
         let mut api = ExchangeApi::new();
@@ -175,8 +166,6 @@ mod tests {
         assert_eq!(settle_pnl(&mut api, 10001, 10_000, 2), CommandResultCode::Success);
     }
 
-    // 对应 Java testDeliveryScenario0() 场景（"没开出来单子交割后不需要结算 -- 交割"）：
-    // 挂单未成交（无实际仓位敞口）时，SettlePnl 是 no-op，不影响 pending 挂单和账户余额。
     #[test]
     fn delivery_scenario0_no_fill_settle_is_noop() {
         let deposit = 20_000i64;
@@ -212,9 +201,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testDeliveryScenario1() 场景（"开出来单子后需要做交割结算 -- 交割"）：
-    // maker/taker 各持有一份多/空仓位，SettlePnl 结算后按 (settlePrice - openPrice) 分配盈亏，
-    // 两边仓位归零、fee 与 PnL 都正确记入账户余额。
     #[test]
     fn delivery_scenario1_full_settlement_pnl() {
         let deposit = 20_000i64;
@@ -246,8 +232,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPerpetualScenario0() 场景（"下期货单但是没有成交, 所有没有开仓成功"）：
-    // 挂单未成交时，SettleFundingFees 是 no-op，不影响 pending 挂单和账户余额。
     #[test]
     fn perpetual_scenario0_no_fill_funding_is_noop() {
         let deposit = 20_000i64;
@@ -278,9 +262,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPerpetualScenario1() 场景（"开出来单子后需要做结算 -- 永续, 正向"）：
-    // 资金费率 > 0 时多头向空头付费，验证开仓、结算后双方 profit 相应变化（附 golden 数值核对
-    // funding fee 事件的 free 余额），随后分两笔平仓（1 手 + 9 手）并核对 initMargin/账户余额。
     #[test]
     fn perpetual_scenario1_positive_funding_full_lifecycle() {
         let deposit = 20_000i64;
@@ -343,9 +324,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPerpetualScenario2() 场景（"开出来单子后需要做结算 -- 永续, 反向"）：
-    // 资金费率 < 0 时空头向多头付费（与 scenario1 方向相反），同样验证结算后 profit 变化
-    // 及分批平仓（1 手 + 9 手）后的 initMargin/账户余额。
     #[test]
     fn perpetual_scenario2_negative_funding_full_lifecycle() {
         let deposit = 20_000i64;
@@ -389,9 +367,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPerpetualScenario3() 场景（"测试某订单多次发起SettleFundingFees是否正常"）：
-    // 开仓后结算资金费把多头 profit 拖到资不抵维持保证金水平，再开启强平引擎并重新推送 mark
-    // price 触发强平流程，验证仓位最终被清空。
     #[test]
     fn perpetual_scenario3_funding_then_liquidation() {
         let deposit = 5_000i64;

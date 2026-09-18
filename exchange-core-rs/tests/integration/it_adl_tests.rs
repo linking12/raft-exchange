@@ -1,6 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITExchangeCoreADL`
-// 验证强平多步级联(FORCE→IF→ADL)：亏损方被强平后先尝试保险基金(IF)接管，IF资金不足时再触发自动减仓(ADL)减仓盈利对手方，全程校验资金守恒与事件流顺序。
+
 mod tests {
     use std::collections::BTreeMap;
 
@@ -43,8 +42,6 @@ mod tests {
         }
     }
 
-    /// 构造门面 + 在 `ExchangeCore` 上装一个 results_consumer 收集器（= Java `resultsConsumer`，逐命令收
-    /// fund events），返回 `(api, collector)`。事件观测走生产机制,不在 `ExchangeApi` 上设 consumer。
     fn setup() -> (ExchangeApi, std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>) {
         let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let sink = collector.clone();
@@ -94,15 +91,12 @@ mod tests {
         assert!(tcb.is_global_zero(), "Global balance conservation broken: {:?}", tcb.global_balances_sum());
     }
 
-    /// 触发 `set_mark_price`（inline 自驱级联）并收集本次触发 + 各级联子命令的 fund events。触发前先 clear
-    /// 掉 setup 阶段积累的事件，故拿到的等价于旧 `cascade_fund_events`（markprice 触发本身不产 fund event）。
     fn collect_cascade_on_mark(api: &mut ExchangeApi, collector: &std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>, symbol: i32, price: i64) -> Vec<FundEvent> {
         collector.borrow_mut().clear();
         assert_eq!(api.set_mark_price(symbol, price), CommandResultCode::Success);
         collector.borrow().clone()
     }
 
-    // 对应 Java testADL：亏损方(LOSER)被强平且IF未接管时，触发ADL减仓盈利对手方(WINNER)，校验减仓量/资金结算/费用/事件流与全局守恒
     #[test]
     fn adl_deleverages_winning_counterparty() {
         let (mut api, cascade_collector) = setup();
@@ -142,7 +136,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testIFTakeover：保险基金(IF)有充足资金时接管亏损方持仓，不触发ADL，校验IF持仓/余额/费用与事件流
     #[test]
     fn if_takeover_absorbs_loser_position_no_adl() {
         let (mut api, cascade_collector) = setup();
@@ -186,7 +179,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testLiquidationReopenAndReliquidate：同一用户经历两轮强平(IF接管)后重新开仓，校验第二轮强平仍能正常完成且IF reserved无残留泄漏
     #[test]
     fn liquidation_reopen_and_reliquidate_no_reserved_leak() {
         let (mut api, _cascade_collector) = setup();

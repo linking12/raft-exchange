@@ -1,7 +1,3 @@
-//! Ported from the Java test class `ITRiskEngineLockedMarginOptimization.java`. Verifies the
-//! `calculateLockedMargin` optimization (commit 03ec8f04) computes correct locked-margin values
-//! across a range of scenarios: single/multi-position, opening/adding/closing, extra margin,
-//! multiple matcher events, pending orders, maker vs. taker, and cross vs. isolated margin mode.
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -99,8 +95,6 @@ mod tests {
         api.user_account(uid, USD)
     }
 
-    // Walks every currency's user balances, adjustments, fees, and open-position PnL/extra
-    // margin to confirm the futures accounting is globally conserved (sums to zero).
     fn assert_conserved(api: &ExchangeApi) {
         for &cur in api.ssp().currencies.keys() {
             let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -123,8 +117,6 @@ mod tests {
         }
     }
 
-    // Corresponds to Java testBasicLockedMarginCalculation(): a single position's locked
-    // (open_init_margin_sum) should be positive and correctly computed.
     #[test]
     fn basic_locked_margin_calculation() {
         let mut api = new_api();
@@ -143,8 +135,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testMultiPositionLockedMargin(): the core optimization test point —
-    // locked margin across 3 different-symbol positions, and how it grows when a position adds.
     #[test]
     fn multi_position_locked_margin() {
         let mut api = new_api();
@@ -176,8 +166,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testNewPositionCreation(): the taker-side-record==null boundary —
-    // locked margin starts at zero and increases as a fresh position is opened and added to.
     #[test]
     fn new_position_creation() {
         let mut api = new_api();
@@ -199,8 +187,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testPositionFullyClose(): locked margin computation when one of two
-    // positions is fully closed — the closed symbol's locked contribution should disappear.
     #[test]
     fn position_fully_close() {
         let mut api = new_api();
@@ -227,8 +213,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testPositionCloseWithExtraMargin(): verifies refundExtraMargin — extra
-    // margin added to an isolated position is refunded (minus the close fee) when it's closed.
     #[test]
     fn position_close_with_extra_margin() {
         let extra_margin = 1000i64;
@@ -262,8 +246,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testMultipleMatcherEvents(): verifies correct looped processing of
-    // multiple MatcherEvents when a single taker order sweeps several resting maker orders.
     #[test]
     fn multiple_matcher_events() {
         let mut api = new_api();
@@ -288,8 +270,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testPendingOrdersLockedMargin(): verifies that pending order size is
-    // tracked via the position record's pending_buy/sell_size fields, and cleared on cancel.
     #[test]
     fn pending_orders_locked_margin() {
         let mut api = new_api();
@@ -322,9 +302,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testMakerLockedMarginCalculation(): the counterparty maker's locked
-    // margin should decrease when the taker reduces the maker's position, leaving other symbols
-    // unaffected.
     #[test]
     fn maker_locked_margin_calculation() {
         let mut api = new_api();
@@ -348,8 +325,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testCrossMarginLockedCalculation(): locked margin computation under
-    // MarginMode::Cross — should be positive while positions are open and decrease on close.
     #[test]
     fn cross_margin_locked_calculation() {
         let mut api = new_api();
@@ -374,8 +349,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Corresponds to Java testPerformanceImprovement(): a functional check that a large order
-    // sweeping 10 resting maker price levels still ends up with the correct aggregated position.
     #[test]
     fn performance_improvement_functional() {
         let mut api = new_api();

@@ -1,10 +1,3 @@
-//! 对应 Java `exchange.core2.core.common.cmd.OrderCommandType`。
-//! Rust 未搬运 Java 侧网关/持久化专用类型：`BINARY_DATA_QUERY`、
-//! `PERSIST_STATE_MATCHING`/`PERSIST_STATE_RISK`/`RECOVER_STATE_MATCHING`/`RECOVER_STATE_RISK`、
-//! `GROUPING_CONTROL`、`SHUTDOWN_SIGNAL`、`RESERVED_COMPRESSED`。
-
-/// 命令类型；`code()`/`from_code()` 对应 Java `OrderCommandType.getCode()`（lombok）与
-/// `OrderCommandType.fromCode(byte)`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderCommandType {
     PlaceOrder,
@@ -45,9 +38,7 @@ pub enum OrderCommandType {
     AutoDeleveraging,
     IfDeposit,
     IfWithdraw,
-    /// code=44。Java 原来 `LIQUIDATION_SCAN=64` 与 `LOAN_IF_DEPOSIT=64` 撞码（`fromCode((byte)64)` 按声明
-    /// 顺序被后者覆盖，scan 反解不出），Rust P6-D 先分配到 44 避开;2026-09-18 已把 Java 侧也改到 44
-    /// 对齐（上 raft 后命令按 byte 码过共识/序列化，两侧必须一致）。
+
     LiquidationScan,
     SettlePnl,
 
@@ -109,8 +100,6 @@ impl OrderCommandType {
         }
     }
 
-    /// 对应 Java `OrderCommandType.fromCode(byte)`（Java 用静态 `HashMap<Byte, OrderCommandType>`
-    /// 查表，未知 code 抛 `IllegalArgumentException`；这里未知 code 直接 panic）。
     pub fn from_code(c: i8) -> Self {
         match c {
             1 => OrderCommandType::PlaceOrder,
@@ -160,13 +149,6 @@ impl OrderCommandType {
         }
     }
 
-    /// 非交易命令分类，对应 Java `OrderCommandType.isNonTrading()`：命中者在
-    /// `RiskEngine::pre_process_command` 走 `RiskEngineCommandDispatcher::dispatch` 二级路由，
-    /// 主 switch 只留交易（下单）/结算/引擎自身生命周期。
-    /// 与 Java 覆盖范围不完全一致：`SettlePnl`/`SystemLiquidationNotify` 在 Java 侧仍留在
-    /// `RiskEngine` 主 switch（`RiskEngine.java` 的 `case SETTLE_PNL` / `case SYSTEM_LIQUIDATION_NOTIFY`），
-    /// Rust 把这两者也并入了 dispatcher（见 `risk_engine_command_dispatcher.rs`），
-    /// 是二级 dispatch 覆盖范围的调整，非行为分歧。
     pub fn is_non_trading(self) -> bool {
         matches!(
             self,
@@ -189,8 +171,6 @@ impl OrderCommandType {
         )
     }
 
-    /// loan 子域命令判断，对应 Java `OrderCommandType.isLoan()`：命中则整块委托给
-    /// `LoanCommandDispatcher::dispatch`，主 switch 里永远看不到 loan 命令。
     pub fn is_loan(self) -> bool {
         matches!(
             self,
@@ -212,8 +192,6 @@ impl OrderCommandType {
     }
 }
 
-/// Rust 专用：Java 枚举无默认值概念，这里给 `derive(Default)` 的宿主结构体（如 `OrderCommand`）
-/// 一个占位类型，选 `Nop` 作为无操作占位。
 impl Default for OrderCommandType {
     fn default() -> Self {
         OrderCommandType::Nop

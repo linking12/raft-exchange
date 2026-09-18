@@ -1,9 +1,3 @@
-//! 对应 Java `exchange.core2.core.orderbook.OrderBookBaseTest`(抽象基类,被
-//! `OrderBookNaiveImplExchangeTest`/`OrderBookDirectImplExchangeTest` 等继承后
-//! 在 Naive 与 Direct 两种实现上各跑一遍)。本文件用同一份场景函数(`scn_*`),
-//! 通过 `parity!` 宏为每个场景同时生成 `naive`/`direct` 两个 `#[test]`,验证
-//! 下单/撤单/减量/改价、IOC/FOK/IOC-Budget/FOK-Budget 各类撮合行为、L2 快照与
-//! matcher 事件在两种订单簿实现上完全一致,且与 Java 版本的预期黄金数据吻合。
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
 use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
 use exchange_core_rs::core::common::cmd::order_command_type::OrderCommandType;
@@ -24,8 +18,6 @@ const MAX_PRICE: i64 = 400000;
 const UID_1: i64 = 412;
 const UID_2: i64 = 413;
 
-// 维护"预期 L2 盘口"的可变镜像,场景函数每做一步操作就同步更新这里的预期值,
-// 再与订单簿实际快照比对(对应 Java 测试里手工维护的期望数组)
 #[derive(Clone)]
 struct L2Helper {
     ask_prices: Vec<i64>,
@@ -134,8 +126,6 @@ impl L2Helper {
     }
 }
 
-// 测试夹具:持有一个订单簿实例(naive 或 direct)+ 预期 L2 镜像,提供下单/撤单/
-// 减量/改价/清空等便捷方法,对应 Java OrderBookBaseTest 的 setUp() + 断言封装
 struct Fixture {
     ob: Box<dyn IOrderBook>,
     exp: L2Helper,
@@ -332,11 +322,9 @@ fn check_reduce(ev: &MatcherTradeEvent, reduce_size: i64, price: i64, completed:
     assert!(ev.next.is_none(), "reduce event should have no successor");
 }
 
-// 对应 Java shouldInitializeWithoutErrors:仅验证夹具初始化(黄金盘口构建)不出错
 fn scn_should_initialize_without_errors(_fx: &mut Fixture) {
 }
 
-// 对应 Java shouldAddGtcOrders:新增 GTC 挂单应正确插入 L2 盘口的对应档位
 fn scn_should_add_gtc_orders(fx: &mut Fixture) {
     fx.newo(Gtc, 93, UID_1, 81598, 0, 1, Ask, CommandResultCode::Success);
     fx.exp.insert_ask(0, 81598, 1);
@@ -351,13 +339,11 @@ fn scn_should_add_gtc_orders(fx: &mut Fixture) {
     fx.assert_l2();
 }
 
-// 对应 Java shouldIgnoredDuplicateOrder:重复 order_id 下单应被忽略,不产生新事件链
 fn scn_should_ignored_duplicate_order(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 1, UID_1, 81600, 0, 100, Ask, CommandResultCode::Success);
     assert_eq!(events(&cmd).len(), 1);
 }
 
-// 对应 Java shouldRemoveBidOrder:撤销一个 bid 挂单应从盘口移除并产生对应 Reduce 事件
 fn scn_should_remove_bid_order(fx: &mut Fixture) {
     let cmd = fx.cancel(5, UID_1, CommandResultCode::Success);
     fx.exp.set_bid_volume(1, 1).decrement_bid_orders_num(1);
@@ -368,7 +354,6 @@ fn scn_should_remove_bid_order(fx: &mut Fixture) {
     check_reduce(ev[0], 20, 81590, true);
 }
 
-// 对应 Java shouldRemoveAskOrder:撤销一个 ask 挂单应从盘口移除并产生对应 Reduce 事件
 fn scn_should_remove_ask_order(fx: &mut Fixture) {
     let cmd = fx.cancel(2, UID_1, CommandResultCode::Success);
     fx.exp.set_ask_volume(0, 25).decrement_ask_orders_num(0);
@@ -379,7 +364,6 @@ fn scn_should_remove_ask_order(fx: &mut Fixture) {
     check_reduce(ev[0], 50, 81599, true);
 }
 
-// 对应 Java shouldReduceBidOrder:部分减量 bid 挂单应保留订单但减少数量
 fn scn_should_reduce_bid_order(fx: &mut Fixture) {
     let cmd = fx.reduce(5, UID_1, 3, CommandResultCode::Success);
     fx.exp.decrement_bid_volume(1, 3);
@@ -390,7 +374,6 @@ fn scn_should_reduce_bid_order(fx: &mut Fixture) {
     check_reduce(ev[0], 3, 81590, false);
 }
 
-// 对应 Java shouldReduceAskOrder:减量超过剩余量时应完全移除该 ask 挂单
 fn scn_should_reduce_ask_order(fx: &mut Fixture) {
     let cmd = fx.reduce(1, UID_1, 300, CommandResultCode::Success);
     fx.exp.remove_ask(1);
@@ -401,7 +384,6 @@ fn scn_should_reduce_ask_order(fx: &mut Fixture) {
     check_reduce(ev[0], 100, 81600, true);
 }
 
-// 对应 Java shouldRemoveOrderAndEmptyBucket:同价位最后一单被撤销后该价格档位应整体消失
 fn scn_should_remove_order_and_empty_bucket(fx: &mut Fixture) {
     let cmd2 = fx.cancel(2, UID_1, CommandResultCode::Success);
     assert_eq!(cmd2.action, Some(Ask));
@@ -418,21 +400,18 @@ fn scn_should_remove_order_and_empty_bucket(fx: &mut Fixture) {
     check_reduce(ev[0], 25, 81599, true);
 }
 
-// 对应 Java shouldReturnErrorWhenDeletingUnknownOrder:撤销不存在的 order_id 应返回错误码
 fn scn_should_return_error_when_deleting_unknown_order(fx: &mut Fixture) {
     let cmd = fx.cancel(5291, UID_1, CommandResultCode::MatchingUnknownOrderId);
     fx.assert_l2();
     assert_eq!(events(&cmd).len(), 0);
 }
 
-// 对应 Java shouldReturnErrorWhenDeletingOtherUserOrder:撤销他人订单应返回未知订单错误码
 fn scn_should_return_error_when_deleting_other_user_order(fx: &mut Fixture) {
     let cmd = fx.cancel(3, UID_2, CommandResultCode::MatchingUnknownOrderId);
     assert!(cmd.matcher_event.is_none());
     fx.assert_l2();
 }
 
-// 对应 Java shouldReturnErrorWhenUpdatingOtherUserOrder:改价他人订单应返回未知订单错误码
 fn scn_should_return_error_when_updating_other_user_order(fx: &mut Fixture) {
     let cmd = fx.update(2, UID_2, 100, CommandResultCode::MatchingUnknownOrderId);
     assert!(cmd.matcher_event.is_none());
@@ -441,21 +420,18 @@ fn scn_should_return_error_when_updating_other_user_order(fx: &mut Fixture) {
     fx.assert_l2();
 }
 
-// 对应 Java shouldReturnErrorWhenUpdatingUnknownOrder:改价不存在的订单应返回错误码
 fn scn_should_return_error_when_updating_unknown_order(fx: &mut Fixture) {
     let cmd = fx.update(2433, UID_1, 300, CommandResultCode::MatchingUnknownOrderId);
     fx.assert_l2();
     assert_eq!(events(&cmd).len(), 0);
 }
 
-// 对应 Java shouldReturnErrorWhenReducingUnknownOrder:减量不存在的订单应返回错误码
 fn scn_should_return_error_when_reducing_unknown_order(fx: &mut Fixture) {
     let cmd = fx.reduce(3, UID_2, 1, CommandResultCode::MatchingUnknownOrderId);
     assert!(cmd.matcher_event.is_none());
     fx.assert_l2();
 }
 
-// 对应 Java shouldReturnErrorWhenReducingByZeroOrNegativeSize:减量为零或负数应被拒绝
 fn scn_should_return_error_when_reducing_by_zero_or_negative_size(fx: &mut Fixture) {
     let cmd = fx.reduce(4, UID_1, 0, CommandResultCode::MatchingReduceFailedWrongSize);
     assert!(cmd.matcher_event.is_none());
@@ -466,14 +442,12 @@ fn scn_should_return_error_when_reducing_by_zero_or_negative_size(fx: &mut Fixtu
     fx.assert_l2();
 }
 
-// 对应 Java shouldReturnErrorWhenReducingOtherUserOrder:减量他人订单应返回未知订单错误码
 fn scn_should_return_error_when_reducing_other_user_order(fx: &mut Fixture) {
     let cmd = fx.reduce(8, UID_2, 3, CommandResultCode::MatchingUnknownOrderId);
     assert!(cmd.matcher_event.is_none());
     fx.assert_l2();
 }
 
-// 对应 Java shouldMoveOrderExistingBucket:改价到已存在的价格档位应合并进该档位
 fn scn_should_move_order_existing_bucket(fx: &mut Fixture) {
     let cmd = fx.update(7, UID_1, 81590, CommandResultCode::Success);
     fx.exp.set_bid_volume(1, 41).increment_bid_orders_num(1).remove_bid(2);
@@ -481,7 +455,6 @@ fn scn_should_move_order_existing_bucket(fx: &mut Fixture) {
     assert_eq!(events(&cmd).len(), 0);
 }
 
-// 对应 Java shouldMoveOrderNewBucket:改价到新的价格档位应新建该档位
 fn scn_should_move_order_new_bucket(fx: &mut Fixture) {
     let cmd = fx.update(7, UID_1, 81594, CommandResultCode::Success);
     fx.exp.remove_bid(2).insert_bid(0, 81594, 20);
@@ -489,7 +462,6 @@ fn scn_should_move_order_new_bucket(fx: &mut Fixture) {
     assert_eq!(events(&cmd).len(), 0);
 }
 
-// 对应 Java shouldMatchIocOrderPartialBBO:IOC 单部分成交最优价位(BBO)挂单
 fn scn_should_match_ioc_order_partial_bbo(fx: &mut Fixture) {
     let cmd = fx.newo(Ioc, 123, UID_2, 1, 0, 10, Ask, CommandResultCode::Success);
     fx.exp.set_bid_volume(0, 30);
@@ -499,7 +471,6 @@ fn scn_should_match_ioc_order_partial_bbo(fx: &mut Fixture) {
     check_trade(ev[0], 4, 81593, 10);
 }
 
-// 对应 Java shouldMatchIocOrderFullBBO:IOC 单完全吃掉最优价位(BBO)挂单
 fn scn_should_match_ioc_order_full_bbo(fx: &mut Fixture) {
     let cmd = fx.newo(Ioc, 123, UID_2, 1, 0, 40, Ask, CommandResultCode::Success);
     fx.exp.remove_bid(0);
@@ -509,7 +480,6 @@ fn scn_should_match_ioc_order_full_bbo(fx: &mut Fixture) {
     check_trade(ev[0], 4, 81593, 40);
 }
 
-// 对应 Java shouldMatchIocOrderWithTwoLimitOrdersPartial:IOC 单跨两档限价单部分成交
 fn scn_should_match_ioc_order_with_two_limit_orders_partial(fx: &mut Fixture) {
     let cmd = fx.newo(Ioc, 123, UID_2, 1, 0, 41, Ask, CommandResultCode::Success);
     fx.exp.remove_bid(0).set_bid_volume(0, 20);
@@ -523,7 +493,6 @@ fn scn_should_match_ioc_order_with_two_limit_orders_partial(fx: &mut Fixture) {
     assert!(orders.iter().any(|o| o.order_id == 5), "order 5 should still be present");
 }
 
-// 对应 Java shouldMatchIocOrderFullLiquidity:IOC 单吃掉多档全部流动性
 fn scn_should_match_ioc_order_full_liquidity(fx: &mut Fixture) {
     let cmd = fx.newo(Ioc, 123, UID_2, MAX_PRICE, MAX_PRICE, 175, Bid, CommandResultCode::Success);
     fx.exp.remove_ask(0).remove_ask(0);
@@ -539,7 +508,6 @@ fn scn_should_match_ioc_order_full_liquidity(fx: &mut Fixture) {
     }
 }
 
-// 对应 Java shouldMatchIocOrderWithRejection:流动性不足以吃满 IOC 单剩余量,尾部应产生 Reject 事件
 fn scn_should_match_ioc_order_with_rejection(fx: &mut Fixture) {
     let cmd = fx.newo(Ioc, 123, UID_2, MAX_PRICE, MAX_PRICE + 1, 270, Bid, CommandResultCode::Success);
     fx.exp.remove_all_asks();
@@ -549,7 +517,6 @@ fn scn_should_match_ioc_order_with_rejection(fx: &mut Fixture) {
     check_reject(ev[0], 25, MAX_PRICE, MAX_PRICE + 1);
 }
 
-// 对应 Java shouldRejectFokBidOrderOutOfBudget:FOK-Budget 买单预算不足以吃满全部量,应整单拒绝
 fn scn_should_reject_fok_bid_order_out_of_budget(fx: &mut Fixture) {
     let size = 180;
     let buy_budget = fx.exp.aggregate_buy_budget(size) - 1;
@@ -561,7 +528,6 @@ fn scn_should_reject_fok_bid_order_out_of_budget(fx: &mut Fixture) {
     check_reject(ev[0], size, buy_budget, buy_budget);
 }
 
-// 对应 Java shouldMatchFokBidOrderExactBudget:FOK-Budget 买单预算恰好吃满全部量
 fn scn_should_match_fok_bid_order_exact_budget(fx: &mut Fixture) {
     let size = 180;
     let buy_budget = fx.exp.aggregate_buy_budget(size);
@@ -577,7 +543,6 @@ fn scn_should_match_fok_bid_order_exact_budget(fx: &mut Fixture) {
     check_trade(ev[3], 10, 200954, 5);
 }
 
-// 对应 Java shouldMatchFokBidOrderExtraBudget:FOK-Budget 买单预算有富余仍应正常全额成交
 fn scn_should_match_fok_bid_order_extra_budget(fx: &mut Fixture) {
     let size = 176;
     let buy_budget = fx.exp.aggregate_buy_budget(size) + 1;
@@ -593,7 +558,6 @@ fn scn_should_match_fok_bid_order_extra_budget(fx: &mut Fixture) {
     check_trade(ev[3], 10, 200954, 1);
 }
 
-// 对应 Java shouldRejectFokAskOrderBelowExpectation:FOK-Budget 卖单期望收入不足应整单拒绝
 fn scn_should_reject_fok_ask_order_below_expectation(fx: &mut Fixture) {
     let size = 60;
     let sell_expectation = fx.exp.aggregate_sell_expectation(size) + 1;
@@ -605,7 +569,6 @@ fn scn_should_reject_fok_ask_order_below_expectation(fx: &mut Fixture) {
     check_reject(ev[0], size, sell_expectation, sell_expectation);
 }
 
-// 对应 Java shouldMatchFokAskOrderExactExpectation:FOK-Budget 卖单期望收入恰好达标
 fn scn_should_match_fok_ask_order_exact_expectation(fx: &mut Fixture) {
     let size = 60;
     let sell_expectation = fx.exp.aggregate_sell_expectation(size);
@@ -619,7 +582,6 @@ fn scn_should_match_fok_ask_order_exact_expectation(fx: &mut Fixture) {
     check_trade(ev[1], 5, 81590, 20);
 }
 
-// 对应 Java shouldMatchFokAskOrderExtraBudget:FOK-Budget 卖单期望收入有富余仍应正常全额成交
 fn scn_should_match_fok_ask_order_extra_budget(fx: &mut Fixture) {
     let size = 61;
     let sell_expectation = fx.exp.aggregate_sell_expectation(size) - 1;
@@ -634,7 +596,6 @@ fn scn_should_match_fok_ask_order_extra_budget(fx: &mut Fixture) {
     check_trade(ev[2], 6, 81590, 1);
 }
 
-// 对应 Java shouldFullyMatchIocBudgetWithSufficientBudget:IOC-Budget 单预算充足时应全额成交
 fn scn_should_fully_match_ioc_budget_with_sufficient_budget(fx: &mut Fixture) {
     let size = 180;
     let buy_budget = fx.exp.aggregate_buy_budget(size);
@@ -649,7 +610,6 @@ fn scn_should_fully_match_ioc_budget_with_sufficient_budget(fx: &mut Fixture) {
     check_trade(ev[3], 10, 200954, 5);
 }
 
-// 对应 Java shouldPartiallyMatchIocBudgetWhenBudgetRunsOut:IOC-Budget 单预算耗尽后剩余量应被拒绝(Reject),已成交部分保留
 fn scn_should_partially_match_ioc_budget_when_budget_runs_out(fx: &mut Fixture) {
     let size = 180;
     let buy_budget = 81599 * 75;
@@ -663,7 +623,6 @@ fn scn_should_partially_match_ioc_budget_when_budget_runs_out(fx: &mut Fixture) 
     check_trade(ev[2], 3, 81599, 25);
 }
 
-// 对应 Java shouldRejectIocBudgetWhenBudgetTooSmallForOneUnit:预算不足以买入哪怕一个最小单位时应整单拒绝
 fn scn_should_reject_ioc_budget_when_budget_too_small_for_one_unit(fx: &mut Fixture) {
     let size = 100;
     let buy_budget = 81598;
@@ -674,7 +633,6 @@ fn scn_should_reject_ioc_budget_when_budget_too_small_for_one_unit(fx: &mut Fixt
     check_reject(ev[0], size, buy_budget, buy_budget);
 }
 
-// 对应 Java shouldRejectAskIocBudget:IOC-Budget 卖单期望收入不足应整单拒绝
 fn scn_should_reject_ask_ioc_budget(fx: &mut Fixture) {
     let size = 50;
     let sell_expectation = 81593 * 40;
@@ -685,7 +643,6 @@ fn scn_should_reject_ask_ioc_budget(fx: &mut Fixture) {
     check_reject(ev[0], size, sell_expectation, sell_expectation);
 }
 
-// 对应 Java shouldFullyMatchMarketableGtcOrder:可成交(marketable)的 GTC 单先撮合,不留挂单
 fn scn_should_fully_match_marketable_gtc_order(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 123, UID_2, 81599, MAX_PRICE, 1, Bid, CommandResultCode::Success);
     fx.exp.set_ask_volume(0, 74);
@@ -695,7 +652,6 @@ fn scn_should_fully_match_marketable_gtc_order(fx: &mut Fixture) {
     check_trade(ev[0], 2, 81599, 1);
 }
 
-// 对应 Java shouldPartiallyMatchMarketableGtcOrderAndPlace:可成交 GTC 单部分成交后剩余量转为挂单
 fn scn_should_partially_match_marketable_gtc_order_and_place(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 123, UID_2, 81599, MAX_PRICE, 77, Bid, CommandResultCode::Success);
     fx.exp.remove_ask(0).insert_bid(0, 81599, 2);
@@ -706,7 +662,6 @@ fn scn_should_partially_match_marketable_gtc_order_and_place(fx: &mut Fixture) {
     check_trade(ev[1], 3, 81599, 25);
 }
 
-// 对应 Java shouldFullyMatchMarketableGtcOrder2Prices:可成交 GTC 单跨两档价格全额成交
 fn scn_should_fully_match_marketable_gtc_order_2_prices(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 123, UID_2, 81600, MAX_PRICE, 77, Bid, CommandResultCode::Success);
     fx.exp.remove_ask(0).set_ask_volume(0, 98);
@@ -718,7 +673,6 @@ fn scn_should_fully_match_marketable_gtc_order_2_prices(fx: &mut Fixture) {
     check_trade(ev[2], 1, 81600, 2);
 }
 
-// 对应 Java shouldFullyMatchMarketableGtcOrderWithAllLiquidity:可成交 GTC 单吃光全部卖方流动性
 fn scn_should_fully_match_marketable_gtc_order_with_all_liquidity(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 123, UID_2, 220000, MAX_PRICE, 1000, Bid, CommandResultCode::Success);
     fx.exp.remove_all_asks().insert_bid(0, 220000, 755);
@@ -733,7 +687,6 @@ fn scn_should_fully_match_marketable_gtc_order_with_all_liquidity(fx: &mut Fixtu
     check_trade(ev[5], 9, 201000, 32);
 }
 
-// 对应 Java shouldMoveOrderFullyMatchAsMarketable:挂单改价后穿价变为可成交单,应立即撮合
 fn scn_should_move_order_fully_match_as_marketable(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 83, UID_2, 81200, MAX_PRICE, 20, Bid, CommandResultCode::Success);
     assert_eq!(events(&cmd).len(), 0);
@@ -748,7 +701,6 @@ fn scn_should_move_order_fully_match_as_marketable(fx: &mut Fixture) {
     check_trade(ev[0], 2, 81599, 20);
 }
 
-// 对应 Java shouldMoveOrderFullyMatchAsMarketable2Prices:挂单改价穿价后跨两档价格成交
 fn scn_should_move_order_fully_match_as_marketable_2_prices(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 83, UID_2, 81594, MAX_PRICE, 100, Bid, CommandResultCode::Success);
     assert_eq!(events(&cmd).len(), 0);
@@ -763,7 +715,6 @@ fn scn_should_move_order_fully_match_as_marketable_2_prices(fx: &mut Fixture) {
     check_trade(ev[2], 1, 81600, 25);
 }
 
-// 对应 Java shouldMoveOrderMatchesAllLiquidity:挂单改价穿价后吃光全部对手方流动性
 fn scn_should_move_order_matches_all_liquidity(fx: &mut Fixture) {
     let cmd = fx.newo(Gtc, 83, UID_2, 81594, MAX_PRICE, 246, Bid, CommandResultCode::Success);
     assert_eq!(events(&cmd).len(), 0);
@@ -781,7 +732,6 @@ fn scn_should_move_order_matches_all_liquidity(fx: &mut Fixture) {
     check_trade(ev[5], 9, 201000, 32);
 }
 
-// 为给定场景函数同时生成 naive/direct 两个 #[test],分别驱动两种订单簿实现跑同一场景
 macro_rules! parity {
     ( $( $name:ident => $scn:path ),+ $(,)? ) => {
         $(

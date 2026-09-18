@@ -1,7 +1,3 @@
-//! Rust 自建的期货端到端场景测试套件。
-//! 未对应单个 Java 测试类,而是针对 `ExchangeApi` 期货撮合/开平仓/追加保证金路径,
-//! 逐场景(多空对敲、加仓减仓、翻仓、保证金调整、比例手续费、Cross 保证金模式)
-//! 验证仓位字段与全局资金守恒;末尾附一个 proptest 随机命令流压测。
 use proptest::prelude::*;
 
 use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -20,7 +16,6 @@ const BASE: i32 = 1;
 const QUOTE: i32 = 2;
 const FUT_SYMBOL: i32 = 300;
 
-// 校验全局资金守恒:各币种(用户余额 + 调整池 + 手续费池 + 持仓浮盈亏/追加保证金)总和恒为 0
 fn assert_futures_conservation(api: &ExchangeApi) {
     for &cur in api.ssp().currencies.keys() {
         let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -43,7 +38,6 @@ fn assert_futures_conservation(api: &ExchangeApi) {
     }
 }
 
-// 校验所有用户的所有币种余额均非负
 fn assert_accounts_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for (&cur, &bal) in &p.accounts {
@@ -52,7 +46,6 @@ fn assert_accounts_non_negative(api: &ExchangeApi) {
     }
 }
 
-// 校验所有持仓的 open_volume / open_init_margin_sum 均非负
 fn assert_positions_non_negative(api: &ExchangeApi) {
     for p in api.ups().users.values() {
         for pos in p.positions.values() {
@@ -74,14 +67,12 @@ fn assert_positions_non_negative(api: &ExchangeApi) {
     }
 }
 
-// 汇总以上三条不变量,每次状态变更后调用
 fn assert_futures_invariants(api: &ExchangeApi) {
     assert_futures_conservation(api);
     assert_accounts_non_negative(api);
     assert_positions_non_negative(api);
 }
 
-// 构造固定手续费(fee_scale_k=0)的永续合约 spec
 fn futures_spec_fixed_fee(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id: FUT_SYMBOL,
@@ -97,7 +88,6 @@ fn futures_spec_fixed_fee(taker_fee: i64, maker_fee: i64) -> CoreSymbolSpecifica
     }
 }
 
-// 构造按成交额比例收费的永续合约 spec
 fn futures_spec_proportional_fee(taker_fee: i64, maker_fee: i64, fee_scale_k: i64) -> CoreSymbolSpecification {
     CoreSymbolSpecification {
         symbol_id: FUT_SYMBOL,
@@ -113,7 +103,6 @@ fn futures_spec_proportional_fee(taker_fee: i64, maker_fee: i64, fee_scale_k: i6
     }
 }
 
-// 创建已注册 BASE/QUOTE 币种及给定期货 symbol 的 ExchangeApi
 fn new_seeded_futures_api(spec: CoreSymbolSpecification) -> ExchangeApi {
     let mut api = ExchangeApi::new();
     api.add_currency(BASE, 1);
@@ -122,14 +111,11 @@ fn new_seeded_futures_api(spec: CoreSymbolSpecification) -> ExchangeApi {
     api
 }
 
-// "朴素"守恒公式:只算用户余额+调整池+手续费池,不含持仓浮盈亏/extra_margin;
-// 在未平仓浮盈亏存在时该值会偏离 0,用于刻画哪些阶段该公式仍精确成立
 fn naive_conservation(api: &ExchangeApi, currency: i32) -> i64 {
     let user_sum: i64 = api.ups().users.values().map(|p| p.account(currency)).sum();
     user_sum + api.adjustments(currency) + api.fees(currency)
 }
 
-// 多空双方开仓后标记价上涨,双方互相平仓结算盈亏;验证 PnL 方向与全程资金守恒
 #[test]
 fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     const LONG_USER: i64 = 1;
@@ -207,7 +193,6 @@ fn scenario_a_long_short_cross_then_mutual_close_settles_pnl() {
     assert!(api.user_account(SHORT_USER, QUOTE) < 100_000, "short should realize negative PnL");
 }
 
-// 同向两次加仓,再分两步减仓至全平;验证 open_volume/open_price_sum 累加及部分平仓不实现盈亏(递延进成本基)
 #[test]
 fn scenario_b_increase_then_partial_reduce_then_full_close() {
     const TRADER: i64 = 1;
@@ -319,8 +304,6 @@ fn scenario_b_increase_then_partial_reduce_then_full_close() {
     assert_eq!(api.user_account(COUNTER, QUOTE), 100_000 - 100 - 310);
 }
 
-// 以超过现有仓位规模的反向单一次性翻仓;验证翻仓瞬间的已实现盈亏先累进但不立即支付,
-// 直至新方向仓位后续平仓时才最终结算
 #[test]
 fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     const FLIPPER: i64 = 1;
@@ -414,8 +397,6 @@ fn scenario_c_flip_via_oversized_opposite_order_defers_then_pays_profit() {
     assert!(api.user_account(COUNTER, QUOTE) < 100_000, "net loss");
 }
 
-// 逐仓模式下追加保证金(MARGIN_ADJUSTMENT),再平仓;验证追加的保证金进入 extra_margin
-// 字段而非直接改变余额,平仓后应全额退回
 #[test]
 fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
     const MARGIN_USER: i64 = 1;
@@ -497,7 +478,6 @@ fn scenario_d_margin_adjustment_add_then_close_refunds_extra_margin() {
     );
 }
 
-// 一个 maker 与两个 taker 在比例手续费(按成交额收取)下多笔成交与平仓;验证守恒精确成立且手续费池非零入账
 #[test]
 fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     const MAKER: i64 = 1;
@@ -586,7 +566,6 @@ fn scenario_e_multi_user_maker_taker_proportional_fee_conserves_exactly() {
     assert!(api.user_position(TAKER2, FUT_SYMBOL).is_none());
 }
 
-// Cross 保证金模式下开仓与平仓;验证仓位 margin_mode 字段正确且资金守恒
 #[test]
 fn scenario_f_cross_margin_mode_open_and_close_conserves() {
     const CROSS_USER: i64 = 1;
@@ -650,8 +629,6 @@ fn scenario_f_cross_margin_mode_open_and_close_conserves() {
     assert!(api.user_account(CROSS_USER, QUOTE) > 100_000 - 100, "CROSS-mode long should realize positive PnL");
 }
 
-// 刻画性测试:A/B 开仓后标记价变动,A 平仓实现盈利,而 B 的未平仓浮亏仍留在其仓位字段内,
-// 此时 naive 守恒公式(不含浮盈亏)会出现偏差——这是公式本身的局限,不是引擎 bug
 #[test]
 fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
     const A: i64 = 1;
@@ -712,7 +689,6 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
     assert_futures_conservation(&api);
 }
 
-// 随机命令流生成器输出的四类期货操作:开仓/平仓/追加保证金/推进标记价
 #[derive(Debug, Clone)]
 enum FutGenCmd {
     PlaceOpen { uid_idx: usize, is_bid: bool, price: i64, size: i64 },
@@ -721,7 +697,6 @@ enum FutGenCmd {
     SetMarkPrice { price: i64 },
 }
 
-// 按权重混合上述各类命令的生成策略
 fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
     let place = (0..n_users, any::<bool>(), 50i64..=200, 1i64..=50)
         .prop_map(|(uid_idx, is_bid, price, size)| FutGenCmd::PlaceOpen { uid_idx, is_bid, price, size });
@@ -732,7 +707,6 @@ fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
     prop_oneof![5 => place, 3 => close, 1 => margin_add, 1 => mark]
 }
 
-// 生成一个完整随机场景:是否固定费率、用户数、各用户杠杆与初始余额、命令序列
 fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<i64>, Vec<FutGenCmd>)> {
     (any::<bool>(), 2usize..=4).prop_flat_map(|(fixed_fee, n_users)| {
         let leverages = prop::collection::vec(1i32..=5, n_users);
@@ -745,8 +719,6 @@ fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    // proptest 主入口:对随机期货命令流(开仓/平仓/追加保证金/markprice)压测,
-    // 每步之后都断言资金守恒与非负不变量
     #[test]
     fn conservation_holds_for_random_futures_command_stream(
         (fixed_fee, n_users, leverages, balances, cmds) in fut_scenario_strategy()

@@ -1,6 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITFeesMargin`（`ITFeesMarginBasic` 为其 Margin 配置实现；`ITFeesMarginLatency` 为 JMH 延迟测试不涉及）
-// 验证期货 maker/taker 手续费计算、GTC 部分成交后挂单量、以及撤单不收手续费
+
 mod tests {
     use std::collections::BTreeMap;
 
@@ -124,7 +123,6 @@ mod tests {
         assert_eq!(total, 0, "futures global conservation broken: JPY total={total}");
     }
 
-    // 对应 Java shouldProcessFees_AskGtcMakerPartial_BidIocTaker：GTC Ask maker 被 IOC Bid taker 部分吃掉，校验双方手续费与持仓
     #[test]
     fn ask_gtc_maker_partial_bid_ioc_taker() {
         let mut api = seed();
@@ -159,7 +157,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java shouldProcessFees_BidGtcMakerPartial_AskIocTaker：GTC Bid maker 被 IOC Ask taker 部分吃掉，校验双方手续费与持仓
     #[test]
     fn bid_gtc_maker_partial_ask_ioc_taker() {
         let mut api = seed();
@@ -192,7 +189,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java shouldNotTakeFeesForCancelAsk：未成交挂单被撤销不产生手续费，账户与持仓完全还原
     #[test]
     fn should_not_take_fees_for_cancel_ask() {
         let mut api = seed();
@@ -221,7 +217,7 @@ mod tests {
         assert_eq!(api.fees(USD), 0);
         assert_conserved(&api);
     }
-    // 无直接对应的 Java @Test：用独立公式（fee_rate × filled）交叉校验 maker/taker 手续费计算，锚定 Java 侧同款 oracle
+
     #[test]
     fn fee_oracle_matches_java_independent_formula() {
         assert_eq!(maker_fee(30), MAKER_FEE * 30, "Java makerFee×30 = 60");

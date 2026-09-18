@@ -1,6 +1,5 @@
 #[cfg(test)]
-// 翻译自 Java `ITExchangeCoreHedgeMode`
-// 验证 HEDGE（双向持仓）模式下的开平仓、保证金隔离、资金费率分摊、结算与强平等行为
+
 mod tests {
     use std::collections::BTreeMap;
 
@@ -149,7 +148,6 @@ mod tests {
         assert_eq!(place_on(api, 10004, UID_3, SYMBOL_ID, 80_000_000, 50, OrderAction::Bid, OrderType::Gtc, MarginMode::Isolated, 10), CommandResultCode::Success);
     }
 
-    // 对应 Java testDefaultSingleDirection：单向持仓模式下反向开单只抵消旧仓，不新开仓位
     #[test]
     fn test_default_single_direction() {
         let mut api = setup();
@@ -185,7 +183,6 @@ mod tests {
         }
     }
 
-    // 对应 Java testChangePositionMode：验证切换单向/双向持仓模式，及切换后挂单在两条腿上独立记账
     #[test]
     fn test_change_position_mode() {
         let mut api = setup();
@@ -213,7 +210,6 @@ mod tests {
         assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().pending_sell_size, 0);
     }
 
-    // 对应 Java testCannotChangeModeWithPosition：持仓存在时禁止切换持仓模式
     #[test]
     fn test_cannot_change_mode_with_position() {
         let mut api = setup();
@@ -244,7 +240,6 @@ mod tests {
         }
     }
 
-    // 对应 Java testMarginHedgeMode：验证 HEDGE 模式下两条腿各自按自己的保证金梯度独立计算
     #[test]
     fn test_margin_hedge_mode() {
         let mut api = ExchangeApi::new();
@@ -270,7 +265,6 @@ mod tests {
         assert_eq!(sym_position_count(&api, UID_2, SYMBOL_ID), 0);
     }
 
-    // 对应 Java testDualPositionSign：验证双向持仓下杠杆/保证金模式不匹配的校验，及两条腿数量独立
     #[test]
     fn test_dual_position_sign() {
         let mut api = setup();
@@ -290,7 +284,6 @@ mod tests {
         assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 50);
     }
 
-    // 对应 Java testClosePosition：验证 close_position 能分别对双向持仓的两条腿独立减仓
     #[test]
     fn test_close_position() {
         let mut api = setup();
@@ -337,7 +330,6 @@ mod tests {
         assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 20);
     }
 
-    // 对应 Java testHedgeModeMatch：验证两个 HEDGE 用户互相撮合，双方各自形成 LONG/SHORT 两条腿
     #[test]
     fn test_hedge_mode_match() {
         let mut api = setup();
@@ -360,7 +352,6 @@ mod tests {
         assert_eq!(leg_dir(&api, UID_5, SYMBOL_ID, PositionDirection::Short).unwrap().open_volume, 50);
     }
 
-    // 对应 Java testHedgeOpenSecondDirectionDoesNotPolluteFreeMarginCalc：开第二个反方向仓位不污染可用保证金计算，全局余额仍守恒
     #[test]
     fn test_hedge_open_second_direction_does_not_pollute_free_margin_calc() {
         let mut api = setup();
@@ -379,7 +370,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero(), "Global conservation must hold after opening the second HEDGE direction");
     }
 
-    // 对应 Java testHedgeModeSelfMatchConservation：验证 HEDGE 模式下自成交（同一用户左右互开）后全局余额仍守恒
     #[test]
     fn test_hedge_mode_self_match_conservation() {
         let mut api = setup();
@@ -395,7 +385,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero(), "Global conservation must hold after a hedge self-match");
     }
 
-    // 对应 Java testMixedFundingRate：混合多空持仓下发送资金费率结算，验证多空两条腿的 profit 加减正确
     #[test]
     fn test_mixed_funding_rate() {
         let mut api = setup();
@@ -440,7 +429,6 @@ mod tests {
         }
     }
 
-    // 对应 Java testSettlePnl：交割合约发起 SettlePnl 后持仓被结清，账户余额正确
     #[test]
     fn test_settle_pnl() {
         const DELIVERY_ID: i32 = 30001;
@@ -487,7 +475,6 @@ mod tests {
         assert_eq!(api.user_account(UID_1, USDT_ID), 10_002_500_000);
     }
 
-    // 对应 Java testTotalBalance：验证双向持仓下 total balance（含 pnl）依然守恒
     #[test]
     fn test_total_balance() {
         let mut api = setup();
@@ -496,7 +483,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // 对应 Java testAddExtraMarginToDualPosition：验证双向持仓时追加保证金能正确记到对应仓位（隔离与全仓两种模式）
     #[test]
     fn test_add_extra_margin_to_dual_position() {
         let mut api = setup();
@@ -558,7 +544,6 @@ mod tests {
         assert_eq!(api.user_account(UID_1, USDT_ID), base_deposit - deposit_long - deposit_short + deposit_cross);
     }
 
-    // 对应 Java testAdjustLeverageDual：验证调整杠杆时双向持仓的两条腿都会被同步更新
     #[test]
     fn test_adjust_leverage_dual() {
         let mut api = setup();
@@ -570,7 +555,6 @@ mod tests {
         assert_eq!(leg_dir(&api, UID_1, SYMBOL_ID, PositionDirection::Short).unwrap().leverage, 20);
     }
 
-    // 概念上对应 Java testLiquidationLoop（双向持仓强平场景）：验证亏损腿被强平清仓、盈利腿保留，且对手方仓位与全局守恒均正确
     #[test]
     fn test_hedge_one_leg_liquidated_other_preserved() {
         let mut api = setup();

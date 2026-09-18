@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
-    // 翻译自 Java `ITFutureBasic`（继承 ITFutureBase，测试类为 exchange.core2.tests.integration.ITFutureBasic）
-    // 验证期货下单/开平仓/reduce-only/杠杆与NSF拒绝/强平等场景下的账户余额、仓位状态与全局资金守恒
+
     use std::collections::BTreeMap;
 
     use exchange_core_rs::core::common::cmd::command_result_code::CommandResultCode;
@@ -94,7 +93,6 @@ mod tests {
         })
     }
 
-    // 校验全局资金守恒：账户余额 + 调整 + 手续费 + 持仓未实现盈亏/保证金之和应为 0
     fn assert_conserved(api: &ExchangeApi) {
         for &cur in api.ssp().currencies.keys() {
             let mut total: i64 = api.ups().users.values().map(|p| p.account(cur)).sum();
@@ -117,7 +115,6 @@ mod tests {
         }
     }
 
-    // 对应 Java testBalanceIncrease：余额增加应正确入账，且不产生仓位
     #[test]
     fn balance_increase_credits_account() {
         let delta = 100;
@@ -130,7 +127,6 @@ mod tests {
         assert!(api.user_position(UID_1, SYMBOL_ID).is_none());
     }
 
-    // 对应 Java testBalanceDecrease：先充值再扣减，验证余额正确扣除
     #[test]
     fn balance_decrease_debits_account() {
         let deposit = 100;
@@ -144,7 +140,6 @@ mod tests {
         assert_eq!(api.user_account(UID_1, SYMBOL_MARGIN), deposit + withdraw);
     }
 
-    // 对应 Java testCancelSuccess：挂单后撤单，余额应原封不动地返还，无仓位残留
     #[test]
     fn cancel_returns_balance_intact() {
         let deposit = 1_000;
@@ -165,7 +160,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenPosition4Bid：maker BID + taker ASK 完全成交开仓，验证手续费扣减与仓位方向
     #[test]
     fn open_position_maker_bid_taker_ask() {
         let deposit = 1_000;
@@ -183,7 +177,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenPosition4Ask：maker ASK + taker BID 完全成交开仓，验证手续费扣减与仓位方向
     #[test]
     fn open_position_maker_ask_taker_bid() {
         let deposit = 1_000;
@@ -201,7 +194,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenMultiplePosition4Bid：maker BID 挂大单，taker ASK 部分成交，验证部分开仓数量
     #[test]
     fn open_multiple_partial_maker_bid() {
         let size = 10;
@@ -220,7 +212,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testOpenMultiplePosition4Ask：maker ASK 挂大单，taker BID 部分成交，验证部分开仓数量
     #[test]
     fn open_multiple_partial_maker_ask() {
         let size = 10;
@@ -239,7 +230,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testClosePosition：开仓后完全平仓，盈亏应结算入账，仓位被拆除
     #[test]
     fn close_full_position_settles_pnl() {
         let deposit = 1_000;
@@ -260,7 +250,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testPartialClosePosition：部分平仓时盈亏递延，不立即计入 profit
     #[test]
     fn partial_close_position_defers_pnl() {
         let deposit = 10_000;
@@ -283,7 +272,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testReduceOnlyWithoutPosition：无仓位时提交 reduce-only 订单应被忽略（不产生仓位）
     #[test]
     fn reduce_only_without_position_is_noop() {
         let deposit = 10_000;
@@ -295,7 +283,6 @@ mod tests {
         assert!(api.user_position(UID_1, SYMBOL_ID).is_none());
     }
 
-    // 对应 Java testReduceOnlyPartialCloseLongPosition：多头仓位先 reduce-only 部分平仓，再平剩余部分
     #[test]
     fn reduce_only_partial_then_full_close_long() {
         let deposit = 100_000;
@@ -319,7 +306,6 @@ mod tests {
         assert!(api.user_position(UID_1, SYMBOL_ID).is_none());
     }
 
-    // 对应 Java testReduceOnlyFullCloseShortPosition：空头仓位先 reduce-only 部分平仓，再平剩余部分
     #[test]
     fn reduce_only_partial_then_full_close_short() {
         let deposit = 100_000;
@@ -343,7 +329,6 @@ mod tests {
         assert!(api.user_position(UID_1, SYMBOL_ID).is_none());
     }
 
-    // 对应 Java testReduceOnlyExceedPositionSize：reduce-only 数量超过持仓量时应被截断，不会反向超卖
     #[test]
     fn reduce_only_exceeding_size_is_truncated() {
         let deposit = 100_000;
@@ -363,7 +348,6 @@ mod tests {
         assert_eq!(api.user_position(UID_3, SYMBOL_ID).unwrap().open_volume, position_size);
     }
 
-    // 对应 Java testReduceOnlyWrongDirection：反方向的 reduce-only 订单同向被裁到 0，不应改变仓位
     #[test]
     fn reduce_only_wrong_direction_is_noop() {
         let deposit = 100_000;
@@ -388,7 +372,6 @@ mod tests {
         assert_eq!(pos.direction, PositionDirection::Long);
     }
 
-    // 对应 Java testReduceOnlySameDirectionDoesNotExtendPosition：同向 reduce-only 应被裁到 0（no-op），不得扩仓
     #[test]
     fn reduce_only_same_direction_does_not_extend() {
         let deposit = 100_000;
@@ -411,7 +394,6 @@ mod tests {
         );
     }
 
-    // 对应 Java testLeverageRejectDoesNotLeavePosition：杠杆超限拒单不应污染 positions，后续合法单仍可成功
     #[test]
     fn leverage_reject_does_not_leave_position() {
         let deposit = 100_000;
@@ -428,7 +410,6 @@ mod tests {
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().open_volume, 1);
     }
 
-    // 对应 Java testNSFRejectDoesNotLeavePosition：无已存在仓位时 NSF 拒单不应污染 positions
     #[test]
     fn nsf_reject_does_not_leave_position() {
         let deposit = 100;
@@ -441,7 +422,6 @@ mod tests {
         assert!(api.user_position(UID_1, SYMBOL_ID).is_none());
     }
 
-    // 对应 Java testNSFRejectKeepsExistingPosition：用户已有仓位时，加仓单 NSF 失败不能误删老仓位
     #[test]
     fn nsf_reject_keeps_existing_position() {
         let deposit = 50_000;
@@ -457,7 +437,6 @@ mod tests {
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().open_volume, 1);
     }
 
-    // 对应 Java testReduceOnlyZeroFollowedBySuccessfulOpen：reduce-only-zero 成功后紧接开仓仍应成功（对象池归还的 record 已正确重置）
     #[test]
     fn reduce_only_zero_followed_by_successful_open() {
         let deposit = 100_000;
@@ -473,7 +452,6 @@ mod tests {
         assert_eq!(api.user_position(UID_1, SYMBOL_ID).unwrap().open_volume, 1);
     }
 
-    // 对应 Java testGlobalBalanceConservedAfterFailedPlaceOrders：连续多种拒单不应影响账户余额与全局资金守恒
     #[test]
     fn global_balance_conserved_after_failed_place_orders() {
         let deposit = 10_000;
@@ -496,8 +474,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java testForceClosePosition（在此基础上进一步驱动实际 FORCE 强平执行）：
-    // 行情大幅不利变动使借款人 LONG 仓位水下，FORCE 应将其全平，清算费计入保险基金
     #[test]
     fn force_close_position_liquidates_underwater_long() {
         const FC_BASE: i32 = 1;
@@ -572,7 +548,6 @@ mod tests {
         assert!(if_available > 0, "liquidation fee must be credited to insurance fund available");
     }
 
-    // 对应 Java testAdjustment：多笔限价 ASK 挂单后一笔 IOC BID 部分扫单，验证扫单后全局资金守恒
     #[test]
     fn adjustment_partial_sweep_conserves_globally() {
         const USD: i32 = 840;

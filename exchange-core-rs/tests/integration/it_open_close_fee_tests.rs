@@ -1,6 +1,3 @@
-//! 对应 Java 测试类 `ITOpenCloseFeeIntegration.java` 的移植：端到端验证期货开仓/关仓手续费的
-//! 6 个核心不变量（maker/taker 各自按率收费、开关仓费率一致、角色互换、反手单双段收费、
-//! fees bucket 跨多笔成交的累加），只关心 fee 行为本身，不校验仓位大小/保证金等无关字段。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -102,8 +99,6 @@ mod tests {
         }
     }
 
-    // 对应 Java pureOpen_chargesMakerAndTakerFee() 场景：纯开仓，maker 挂 ASK、taker 吃单，
-    // maker 付 makerFee × size，taker 付 takerFee × size，fees bucket 增加二者之和。
     #[test]
     fn pure_open_charges_maker_and_taker_fee() {
         let mut api = fresh_api();
@@ -123,8 +118,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java pureClose_chargesMakerAndTakerFee_atSameRateAsOpen() 场景：先开后平（同价位反向成交），
-    // 验证开仓和平仓按同一费率收取，maker/taker 角色不变时各自被收两次（开 + 关）。
     #[test]
     fn pure_close_charges_maker_and_taker_fee_at_same_rate_as_open() {
         let mut api = fresh_api();
@@ -148,8 +141,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java closeFee_swapsSideOnRoleSwitch() 场景：开仓 UID_1 maker / UID_2 taker，
-    // 平仓时角色互换（UID_2 maker / UID_1 taker），验证关仓费按新角色收，而非开仓时的旧角色。
     #[test]
     fn close_fee_swaps_side_on_role_switch() {
         let mut api = fresh_api();
@@ -171,8 +162,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java reverseFill_chargesBothCloseAndOpenFee() 场景：一笔成交同时关旧仓 + 开反向新仓
-    // （持仓 LONG 遇到量更大的反向 SHORT），验证关仓段和开仓段分别按各自费率独立收费、互不覆盖。
     #[test]
     fn reverse_fill_charges_both_close_and_open_fee() {
         let mut api = fresh_api();
@@ -199,8 +188,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // 对应 Java feesBucket_aggregatesAcrossMultipleFills() 场景：跑多笔开+平成交，
-    // 验证 fees bucket 恰好是所有 open/close fee 之和，无遗漏也无重复计算。
     #[test]
     fn fees_bucket_aggregates_across_multiple_fills() {
         let mut api = fresh_api();

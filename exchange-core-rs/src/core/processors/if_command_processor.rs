@@ -1,11 +1,3 @@
-//! 对应 Java `exchange.core2.core.processors.IFCommandProcessor`。
-//!
-//! IF（保险基金）接管命令的两步处理器：先按 `size * price` 名义价值在保险基金余额上预占
-//! （`reserve_if_notional`），只有当预占额度能整单覆盖 `remaining_size` 时才接受接管，否则全拒
-//! （不做部分接管，见 `build_matcher_events`）；接受后把仓位记到保险基金账本上（`accept_if_position`），
-//! 并平掉发起方（taker）被接管的仓位，最后释放预占余量（与预占对称）。
-//! Rust 单实例无 shard，故不像 Java 那样要按 `floor(reservedNotional / price)` 逐 shard 汇总覆盖量。
-
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::fund_event::FundEventType;
@@ -16,13 +8,10 @@ use crate::core::processors::liquidation::liquidation_service::LiquidationServic
 use crate::core::processors::risk_engine::RiskEngine;
 use crate::core::processors::twostep_command_processor::{TwoStepCommandProcessor, TwoStepContext};
 
-/// 无状态标记类型，方法均为纯函数式的 `&self` 调用。
 pub struct IfCommandProcessor;
 
 impl TwoStepCommandProcessor for IfCommandProcessor {
-    /// 对应 Java `collectInput`（预占 notional）+ matcher stage `buildMatcherEvents`（判断能否整单覆盖）的合并。
-    /// 把预占额度写回 `cmd.if_preview_cover`（供 `apply` 结尾对称释放），把实际能接管的量（覆盖不足则为
-    /// `None`）写回 `cmd.if_takeover_size`。
+
     fn collect(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) -> CommandResultCode {
         let preview = Self::collect_input(&mut ctx.risk.liquidation_service, cmd.symbol, cmd.size, cmd.price);
         cmd.if_preview_cover = preview;
@@ -30,9 +19,6 @@ impl TwoStepCommandProcessor for IfCommandProcessor {
         CommandResultCode::Success
     }
 
-    /// 对应 Java R2 `applyEvent`（写入保险基金仓位）+ `finalizeForCommand`（平 taker 仓位 + 释放预占）的合并。
-    /// `accepted_size` 为 `None`（覆盖不足被全拒）时只生成 REJECT 事件，不落账任何仓位；无论接受与否，
-    /// 结尾都必须释放 `collect` 阶段的预占（与预占对称，否则保险基金 notional 额度会永久少一块）。
     fn apply(&self, ctx: &mut TwoStepContext, cmd: &mut OrderCommand) {
         let symbol = cmd.symbol;
         let price = cmd.price;
@@ -78,15 +64,11 @@ impl TwoStepCommandProcessor for IfCommandProcessor {
 }
 
 impl IfCommandProcessor {
-    /// 对应 Java `collectInput`：在保险基金 notional 余额上为本次接管预占 `size * price`，返回实际预占到
-    /// 的额度（余额不足时小于请求值）。
+
     fn collect_input(liquidation: &mut LiquidationService, symbol: i32, size: i64, price: i64) -> i64 {
         liquidation.reserve_if_notional(symbol, size, price)
     }
 
-    /// 对应 Java matcher stage `buildMatcherEvents`：按 `floor(preview_cover / price)` 算出预占额度能覆盖
-    /// 的最大数量；只有覆盖量 ≥ `remaining_size` 才整单接受，否则返回 `None` 全拒——保险基金接管是
-    /// all-or-nothing，不做部分接管。
     fn build_matcher_events(preview_cover: i64, remaining_size: i64, price: i64) -> Option<i64> {
         if remaining_size <= 0 || price <= 0 {
             return None;
@@ -98,7 +80,6 @@ impl IfCommandProcessor {
         Some(max_size_by_notional.min(remaining_size))
     }
 
-    /// 对应 Java R2 `applyEvent`：把接受的接管量记到保险基金在该 symbol/方向上的仓位账本。
     fn apply_event(
         liquidation: &mut LiquidationService,
         symbol: i32,

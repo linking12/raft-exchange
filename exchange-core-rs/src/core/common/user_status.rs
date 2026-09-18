@@ -1,8 +1,3 @@
-//! 对应 Java `exchange.core2.core.common.UserStatus`。
-
-/// 用户状态：Active=正常，Suspended=已挂起（挂起后拒绝除恢复外的绝大多数命令，
-/// 详见 loan.md 中 `LOAN_USER_SUSPENDED` 相关判定）。`code()` 对应 Java `getCode()`（lombok），
-/// Active=0/Suspended=1。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserStatus {
     Active,
@@ -17,7 +12,6 @@ impl UserStatus {
         }
     }
 
-    /// 对应 Java `UserStatus.of(byte)`：未知 code 直接 panic（Java 抛 IllegalArgumentException）。
     pub fn of_code(code: i8) -> Self {
         match code {
             0 => UserStatus::Active,
