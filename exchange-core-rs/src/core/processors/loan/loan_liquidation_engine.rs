@@ -202,11 +202,10 @@ impl LoanLiquidationEngine {
                 order_id: loan.loan_id,
                 uid: loan.uid,
                 currency: loan.loan_currency,
+                currency_scale_k: loan_currency_spec.map(|s| s.currency_scale_k).unwrap_or(0),
                 loan_mode: 0,
                 loan_ltv_bps: if collateral_value == 0 { 0 } else { ltv_scaled / collateral_value },
                 loan_threshold_bps: spec.loan_config.margin_call_ltv_bps as i64,
-                loan_collateral_currency: loan.collateral_currency,
-                loan_collateral_pledged: loan.collateral_amount,
                 ..Default::default()
             });
         }

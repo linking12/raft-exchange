@@ -447,10 +447,19 @@ impl RiskEngine {
                     if let Some(taker) = ups.get_mut(liq_fee_uid) {
                         taker.add_to_account(spec.quote_currency, -quote_fee);
                         self.liquidation_service.credit_liquidation_fee(cmd.symbol, notional_fee);
-                        let ev = Self::spot_snapshot_event(
-                            FundEventType::LiquidationFee, liq_fee_order_id, taker, liq_fee_currency, ssp, &quote_currency_spec, liq_fee_symbol,
-                        );
-                        cmd.fund_events.push(ev);
+                    }
+                    if let Some(taker) = ups.get(liq_fee_uid) {
+                        match taker.positions.values().find(|p| p.symbol == liq_fee_symbol && p.open_volume != 0) {
+                            Some(pos) => Self::push_futures_event(
+                                &mut cmd.fund_events, last_price_cache, FundEventType::LiquidationFee, liq_fee_order_id, pos, &spec, taker, ssp,
+                            ),
+                            None => {
+                                let ev = Self::spot_snapshot_event(
+                                    FundEventType::LiquidationFee, liq_fee_order_id, taker, liq_fee_currency, ssp, &quote_currency_spec, liq_fee_symbol,
+                                );
+                                cmd.fund_events.push(ev);
+                            }
+                        }
                     }
                 }
                 Self::advance_liquidation_for(&mut self.liquidation_engine, cmd, ups);
@@ -1845,9 +1854,11 @@ impl RiskEngine {
         match mte.event_type {
             MatcherEventType::Trade => {
                 let pre_volume = up.positions.get(&position_key).unwrap().open_volume;
-                up.positions.get_mut(&position_key).unwrap().pending_release(action, mte.size);
+                let pending_released = up.positions.get_mut(&position_key).unwrap().pending_release(action, mte.size);
 
-                Self::push_futures_event(fund_events, last_price_cache, FundEventType::UnlockPending, event_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
+                if pending_released > 0 {
+                    Self::push_futures_event(fund_events, last_price_cache, FundEventType::UnlockPending, event_order_id, up.positions.get(&position_key).unwrap(), spec, up, ssp);
+                }
 
                 let size_to_open = up
                     .positions

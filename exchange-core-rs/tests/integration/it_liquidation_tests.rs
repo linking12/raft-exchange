@@ -160,7 +160,6 @@ mod tests {
         assert_eq!(api.user_position(lp, BTC_SYM).unwrap().pending_buy_size, liquidity - position_size, "lp liquidity consumed by 10");
         let seq: Vec<(FundEventType, i64)> = api.cascade_fund_events().iter().map(|e| (e.event_type, e.uid)).collect();
         assert_eq!(seq, vec![
-            (FundEventType::UnlockPending, trader),
             (FundEventType::LiquidationClose, trader),
             (FundEventType::PnlSettlement, trader),
             (FundEventType::UnlockPending, lp),
