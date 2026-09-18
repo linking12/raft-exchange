@@ -155,8 +155,6 @@ impl ExchangeApi {
         rc
     }
 
-    // ============================== 配置 / Setup（币种·symbol·用户·账户·loan 种子 + 用户级管理开关）==============================
-
     pub fn add_currency(&mut self, currency: i32, scale_k: i64) {
         self.core.ssp.add_currency(CoreCurrencySpecification { currency, currency_scale_k: scale_k, ..Default::default() });
     }
@@ -280,8 +278,6 @@ impl ExchangeApi {
     pub fn resume_user(&mut self, uid: i64) -> CommandResultCode {
         self.run(OrderCommand { command: OrderCommandType::ResumeUser, uid, ..Default::default() })
     }
-
-    // ============================== 交易 / Trading（现货·期货·清算·结算/资金费·转账·保险基金·loan·pool）==============================
 
     pub fn place_order(&mut self, req: PlaceOrderRequest) -> CommandResultCode {
         let cmd = OrderCommand {
@@ -530,8 +526,6 @@ impl ExchangeApi {
         self.run(cmd)
     }
 
-    // ============================== 查询 / Queries（余额·持仓·手续费·盘口·最近命令/事件·子服务句柄）==============================
-
     pub fn user_account(&self, uid: i64, currency: i32) -> i64 {
         self.core.ups.get(uid).map(|p| p.account(currency)).unwrap_or(0)
     }
@@ -586,8 +580,6 @@ impl ExchangeApi {
     pub fn risk(&self) -> &RiskEngine {
         &self.core.risk
     }
-
-    // ============================== 报表 / Reports（守恒·单用户·保险基金·symbol-currency·手续费·loan 平台·state-hash）==============================
 
     pub fn total_balance(&self) -> crate::core::reports::TotalCurrencyBalanceReport {
         self.core.query_total_balance()
