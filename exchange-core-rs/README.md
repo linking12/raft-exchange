@@ -64,7 +64,7 @@ assert!(api.total_balance().is_global_zero());     // 例:全局账面净零(强
 `ExchangeApi` 的方法按 **配置 → 撮合 → 查询 → 报表** 分层(见 `src/core/exchange_api.rs`)。两个入口:
 
 - **`ExchangeApi`**(`src/core/exchange_api.rs`)—— 高层门面,把常用操作封成方法(`place_order` / `cancel_order` / `move_order` / `place_futures_order` / `close_position` / `margin_adjustment` / `balance_adjustment` …),并缓存上一条命令的事件供读取(`last_matcher_event` / `last_fund_events`)。适合测试与嵌入。
-- **`ExchangeCore`**(`src/core/exchange_core.rs`)—— 底层引擎。唯一入口 `process_command(&mut OrderCommand)`,加上快照 `to_snapshot_bytes` / `from_snapshot_bytes`。Raft 状态机直接喂 `OrderCommand` 走这个。
+- **`ExchangeCore`**(`src/core/exchange_core.rs`)—— 底层引擎。唯一入口 `process_command(&mut OrderCommand)`;快照经**持有的 `SerializationProcessor`**(`InMemory`/`File` 后端,对齐 Java `ISerializationProcessor`),按 per-(模块 RE/ME, 分片 instanceId) 调 `persist(snapshot_id, instance_id)` / `recover(snapshot_id, instance_id)`。Raft 状态机直接喂 `OrderCommand` 走这个。
 
 ## 架构
 
@@ -98,6 +98,19 @@ exchange-core 本身即单一 Java module,故 Rust 侧也是**单 crate**,内部
 | `core::exchange_api` | `ExchangeApi` 高层门面 | `core/ExchangeApi.java` |
 | `core::reports` | 报表:全局余额守恒、单用户、保险基金 | `ReportQuery` 系列 |
 | `core::utils` | 定点算术(`i128` 中间量、缩放、ceil/floor) | `CoreArithmeticUtils` 等 |
+
+---
+
+## ExchangeApi 与 Java 对照
+
+Java `ExchangeApi` 是 Disruptor 之上的**异步提交层**(`RingBuffer` + `CompletableFuture` + `PromiseBuffer` + 批量/回调);Rust `ExchangeApi` 是**同步门面**——直接持有 `ExchangeCore`,每个方法内联跑一次 `process_command` 并缓存结果。**业务操作零缺失**,差异只在提交模型与便捷封装粒度:
+
+- **命令覆盖完整**:Rust `OrderCommandType` 覆盖全部 **43 个业务命令码**;Java `OrderCommandType` 有 51 个,多出的 8 个全是**基础设施/传输类、非业务**——`GROUPING_CONTROL`/`SHUTDOWN_SIGNAL`/`RESERVED_COMPRESSED`(Disruptor/journal 生命周期,单管线 N/A)、`BINARY_DATA_QUERY`(Rust 直接调报表访问器)、`PERSIST_STATE_{MATCHING,RISK}` + `RECOVER_STATE_{MATCHING,RISK}`(这 4 个 Rust 合并进 `persist()` / `recover()` 两个方法,一次处理 RE+ME 两模块)。**44 个 `Api*` 业务命令全部有对应**。
+- **便捷方法**(有专用封装的高频操作):`add_user`/`balance_adjustment`/`place_order`/`place_futures_order`/`cancel_order`/`move_order`/`reduce_order`/`close_position`/`margin_adjustment`/`leverage_adjustment`/`adjust_position_mode`/`set_mark_price`/`suspend_user`/`resume_user`;初始化批量入口 `add_currencies`/`add_symbols`/`add_accounts`/`add_loans`(对齐 Java `BatchAdd*Command`)。
+- **通用入口** `submit(OrderCommand)`:loan(`LoanCreate`/`LoanRepay`/`LoanCross*`/…)、`PoolDeposit`/`PoolWithdraw`、`IfDeposit`/`IfWithdraw`、`SettlePnl`/`SettleFundingfees`、`RepriceLoanRates`、`InternalTransfer`、`ResetFee`、`Reset` 等经此提交(与 Java 逐命令对拍一致,只是不各配一个便捷 wrapper)。
+- **快照** `persist(snapshot_id, instance_id)` / `recover(...)` 经持有的 `SerializationProcessor` = Java `submitPersistCommandAsync`/`submitRecoverCommandAsync`(见模块表 `ExchangeCore`)。
+- **报表**:直接访问器 `total_balance`/`single_user`/`fee_report`/`insurance_fund`/`loan_platform`/`symbol_currency`/`state_hash` = Java `processReport`/`submitQueryAsync`。
+- **不移植**:Java 异步层(`submitCommandAsync`/`FullResponse`/`submitBatchAsync`/回调/`RingBuffer`)、`groupingControl`(Disruptor 批处理控制)——单线程顺序管线下 N/A。
 
 ---
 
@@ -143,5 +156,5 @@ cargo bench --bench engine_throughput  # 纯引擎吞吐基准(绕开 Raft,直�
 
 ## 说明
 
-- 快照:`ExchangeCore::to_snapshot_bytes` / `from_snapshot_bytes`(bincode),供 Raft install-snapshot;测试观测缓冲(`last_cascade_events` 等)`#[serde(skip)]` 不进快照。
+- 快照:`ExchangeCore::persist` / `recover` 经持有的 `SerializationProcessor` 走 **Chronicle Wire 二进制**(与 Java `.ecs`/`.dat` 快照互通,**非 bincode/serde**——已整套删除),分帧对齐 Java `ISerializationProcessor`(RE/ME 两模块 + LZ4 autodetect);供 Raft install-snapshot。非复制态观测缓冲(`last_cascade_events` 等)不写进快照。
 - `state_hash`(逐字段折叠复制态)用于多节点/快照往返一致性校验;它是 Rust 内部超集,不与 Java 的 hash 直接互比(跨实现比对见"一致性保障"③)。
