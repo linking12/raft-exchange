@@ -258,22 +258,22 @@ impl LiquidationEngine {
                     risk_pairs.push((risk, key));
                 }
             }
-            risk_pairs.sort_by_key(|p| p.0);
             let equity = total_profit
                 + profile.calculate_cross_available(currency, currency_spec, |s| ssp.get_symbol(s));
             let warning_threshold = mul_exact(total_maintenance, 6) / 5;
             if equity >= warning_threshold {
                 continue;
             }
+            risk_pairs.sort_by_key(|p| p.0);
             if equity >= total_maintenance {
-                if let Some(&(_, key)) = risk_pairs.first() {
-                    if let Some(position) = profile.positions.get(&key) {
-                        if let Some(spec) = ssp.get_symbol(position.symbol) {
-                            fund_events.push(Self::notification_event(
-                                FundEventType::MarginAlert, uid, position, spec, profile, ssp, last_price_cache,
-                            ));
-                        }
-                    }
+                if let Some((position, spec)) = risk_pairs
+                    .first()
+                    .and_then(|&(_, key)| profile.positions.get(&key))
+                    .and_then(|p| ssp.get_symbol(p.symbol).map(|s| (p, s)))
+                {
+                    fund_events.push(Self::notification_event(
+                        FundEventType::MarginAlert, uid, position, spec, profile, ssp, last_price_cache,
+                    ));
                 }
                 continue;
             }
