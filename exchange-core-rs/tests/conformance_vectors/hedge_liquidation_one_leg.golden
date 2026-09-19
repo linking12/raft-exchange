@@ -17,7 +17,12 @@ A 2 2 10000000
 A 3 2 10000000
 POS 3 10040 LONG 5 5000 50 0
 EVENTS
+FE CLOSE_POSITION uid=2 cur=2 free=9999901 locked=99
 FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
 FE LIQUIDATION_CLOSE uid=1 cur=2 free=2950 locked=50
 FE LIQUIDATION_FEE uid=1 cur=2 free=2850 locked=50
+FE OPEN_POSITION uid=1 cur=2 free=2850 locked=150
+FE OPEN_POSITION uid=1 cur=2 free=2900 locked=100
+FE OPEN_POSITION uid=2 cur=2 free=9999900 locked=100
+FE OPEN_POSITION uid=3 cur=2 free=9999950 locked=50
 FE PNL_SETTLEMENT uid=1 cur=2 free=2850 locked=50

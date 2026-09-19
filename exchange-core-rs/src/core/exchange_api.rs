@@ -1,5 +1,3 @@
-use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
-use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::cmd::order_command::{OrderCommand, FLAG_REDUCE_ONLY};
 use crate::core::common::cmd::command_result_code::CommandResultCode;
 use crate::core::common::order_action::OrderAction;
@@ -12,10 +10,17 @@ use crate::core::common::symbol_type::SymbolType;
 use crate::core::common::batch_add_loan_command::BatchAddLoanCommand;
 use crate::core::common::isolated_loan_record::LoanRateMode;
 use crate::core::common::margin_mode::MarginMode;
-use crate::core::common::symbol_position_record::SymbolPositionRecord;
-use crate::core::processors::risk_engine::RiskEngine;
 
 use super::exchange_core::ExchangeCore;
+
+#[cfg(any(test, feature = "testing"))]
+use crate::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
+#[cfg(any(test, feature = "testing"))]
+use crate::core::processors::user_profile_service::UserProfileService;
+#[cfg(any(test, feature = "testing"))]
+use crate::core::common::symbol_position_record::SymbolPositionRecord;
+#[cfg(any(test, feature = "testing"))]
+use crate::core::processors::risk_engine::RiskEngine;
 
 #[derive(Debug, Clone)]
 pub struct PlaceOrderRequest {
@@ -534,10 +539,6 @@ impl ExchangeApi {
         self.core.ups.get(uid).map(|p| p.locked(currency)).unwrap_or(0)
     }
 
-    pub fn user_position(&self, uid: i64, symbol: i32) -> Option<&SymbolPositionRecord> {
-        self.core.ups.get(uid).and_then(|p| p.positions.get(&symbol))
-    }
-
     pub fn fees(&self, currency: i32) -> i64 {
         *self.core.risk.fees.get(&currency).unwrap_or(&0)
     }
@@ -555,30 +556,6 @@ impl ExchangeApi {
         };
         self.core.process_command(&mut cmd);
         cmd.market_data.take().unwrap_or_default()
-    }
-
-    pub fn last_cmd(&self) -> &OrderCommand {
-        self.last_cmd.as_ref().expect("no command submitted yet")
-    }
-
-    pub fn last_matcher_event(&self) -> Option<&crate::core::common::matcher_trade_event::MatcherTradeEvent> {
-        self.last_cmd().matcher_event.as_deref()
-    }
-
-    pub fn last_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
-        &self.last_cmd().fund_events
-    }
-
-    pub fn ups(&self) -> &UserProfileService {
-        &self.core.ups
-    }
-
-    pub fn ssp(&self) -> &SymbolSpecificationProvider {
-        &self.core.ssp
-    }
-
-    pub fn risk(&self) -> &RiskEngine {
-        &self.core.risk
     }
 
     pub fn total_balance(&self) -> crate::core::reports::TotalCurrencyBalanceReport {
@@ -609,6 +586,40 @@ impl ExchangeApi {
         self.core.query_state_hash()
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    pub fn user_position(&self, uid: i64, symbol: i32) -> Option<&SymbolPositionRecord> {
+        self.core.ups.get(uid).and_then(|p| p.positions.get(&symbol))
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn last_cmd(&self) -> &OrderCommand {
+        self.last_cmd.as_ref().expect("no command submitted yet")
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn last_matcher_event(&self) -> Option<&crate::core::common::matcher_trade_event::MatcherTradeEvent> {
+        self.last_cmd().matcher_event.as_deref()
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn last_fund_events(&self) -> &[crate::core::common::fund_event::FundEvent] {
+        &self.last_cmd().fund_events
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn ups(&self) -> &UserProfileService {
+        &self.core.ups
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn ssp(&self) -> &SymbolSpecificationProvider {
+        &self.core.ssp
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn risk(&self) -> &RiskEngine {
+        &self.core.risk
+    }
 }
 
 #[cfg(test)]

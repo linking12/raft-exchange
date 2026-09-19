@@ -148,6 +148,8 @@ fn fe_allowed(t: FundEventType) -> bool {
             | MarginAlert
             | LiquidationAlert
             | LoanMarginCall
+            | OpenPosition
+            | ClosePosition
     )
 }
 

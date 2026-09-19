@@ -47,7 +47,6 @@ impl Default for ExchangeCore {
 }
 
 impl ExchangeCore {
-
     pub fn new() -> Self {
         let mut core = ExchangeCore {
             risk: RiskEngine::new(),

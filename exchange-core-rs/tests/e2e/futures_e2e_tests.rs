@@ -695,6 +695,7 @@ enum FutGenCmd {
     ClosePosition { uid_idx: usize, price: i64, size: i64 },
     MarginAdd { uid_idx: usize, amount: i64 },
     SetMarkPrice { price: i64 },
+    SettleFunding { is_ask: bool, rate: i64 },
 }
 
 fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
@@ -704,7 +705,8 @@ fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
         .prop_map(|(uid_idx, price, size)| FutGenCmd::ClosePosition { uid_idx, price, size });
     let margin_add = (0..n_users, 1i64..=5_000).prop_map(|(uid_idx, amount)| FutGenCmd::MarginAdd { uid_idx, amount });
     let mark = (50i64..=200).prop_map(|price| FutGenCmd::SetMarkPrice { price });
-    prop_oneof![5 => place, 3 => close, 1 => margin_add, 1 => mark]
+    let funding = (any::<bool>(), 1i64..=1_000).prop_map(|(is_ask, rate)| FutGenCmd::SettleFunding { is_ask, rate });
+    prop_oneof![5 => place, 3 => close, 1 => margin_add, 1 => mark, 1 => funding]
 }
 
 fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<i64>, Vec<FutGenCmd>)> {
@@ -803,6 +805,12 @@ proptest! {
                 }
                 FutGenCmd::SetMarkPrice { price } => {
                     let _ = api.set_mark_price(FUT_SYMBOL, *price);
+                }
+                FutGenCmd::SettleFunding { is_ask, rate } => {
+                    let action = if *is_ask { OrderAction::Ask } else { OrderAction::Bid };
+                    let order_id = next_order_id;
+                    next_order_id += 1;
+                    let _ = api.settle_funding_fees(FUT_SYMBOL, action, *rate, 1_000_000, order_id);
                 }
             }
             assert_futures_invariants(&api);
