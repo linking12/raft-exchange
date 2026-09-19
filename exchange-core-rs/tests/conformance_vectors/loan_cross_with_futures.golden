@@ -19,6 +19,7 @@ FE DEPOSIT uid=2 cur=1 free=300 locked=0
 FE DEPOSIT uid=2 cur=2 free=1000000 locked=0
 FE DEPOSIT uid=4 cur=2 free=1000000 locked=0
 FE LOAN_BORROW uid=2 cur=2 free=1050000 locked=0
+FE LOAN_COLLATERAL_CHANGE uid=2 cur=0 free=0 locked=0
 FE LOCK_PENDING uid=2 cur=2 free=1049000 locked=1000
 FE LOCK_PENDING uid=4 cur=2 free=999000 locked=1000
 FE OPEN_POSITION uid=2 cur=2 free=1049000 locked=1000

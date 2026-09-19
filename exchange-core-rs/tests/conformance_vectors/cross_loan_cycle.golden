@@ -9,4 +9,5 @@ A 2 1 300
 EVENTS
 FE DEPOSIT uid=2 cur=1 free=300 locked=0
 FE LOAN_BORROW uid=2 cur=2 free=50000 locked=0
+FE LOAN_COLLATERAL_CHANGE uid=2 cur=0 free=0 locked=0
 FE LOAN_REPAY uid=2 cur=2 free=0 locked=0

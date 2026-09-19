@@ -23,8 +23,8 @@ FE UNLOCK_PENDING uid=1 cur=2 free=4950 locked=50
 FE UNLOCK_PENDING uid=1 cur=2 free=5000 locked=0
 FE UNLOCK_PENDING uid=2 cur=2 free=50000 locked=0
 MATCH
-ERF NEW NEW uid=1 oid=1 side=BID maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
-ERF NEW NEW uid=2 oid=2 side=ASK maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
-ERF TRADE FILLED uid=2 oid=2 side=ASK maker=0 pos=ONEWAY cp=1 px=1000 lastQty=5 lastPx=1000 cumQty=5 cumQ=5000 avgPx=1000 fee=10
-ERF TRADE FILLED uid=1 oid=1 side=BID maker=1 pos=ONEWAY cp=2 px=1000 lastQty=5 lastPx=1000 cumQty=5 cumQ=5000 avgPx=1000 fee=0
-ERF REJECT REJECTED uid=1 oid=42958263091200 side=ASK maker=0 pos=ONEWAY cp=-1 px=992 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
+ERF NEW NEW uid=1 oid=1 side=BID maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2
+ERF NEW NEW uid=2 oid=2 side=ASK maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2
+ERF TRADE FILLED uid=2 oid=2 side=ASK maker=0 pos=ONEWAY cp=1 px=1000 lastQty=5 lastPx=1000 cumQty=5 cumQ=5000 avgPx=1000 fee=10 feeAsset=2
+ERF TRADE FILLED uid=1 oid=1 side=BID maker=1 pos=ONEWAY cp=2 px=1000 lastQty=5 lastPx=1000 cumQty=5 cumQ=5000 avgPx=1000 fee=0 feeAsset=2
+ERF REJECT REJECTED uid=1 oid=42958263091200 side=ASK maker=0 pos=ONEWAY cp=-1 px=992 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2

@@ -1,0 +1,5 @@
+# Deposit + Withdraw 资金事件:正向 balance-adjustment 发 Deposit,负向发 Withdraw。
+CUR id=1 digit=0
+USER uid=1
+BAL uid=1 cur=1 amount=1000 txid=1
+BAL uid=1 cur=1 amount=-300 txid=2

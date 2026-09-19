@@ -19,6 +19,15 @@ import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiInsuranceFundDeposit;
 import exchange.core2.core.common.api.ApiInternalTransfer;
+import exchange.core2.core.common.api.ApiClosePosition;
+import exchange.core2.core.common.api.ApiAdjustLeverage;
+import exchange.core2.core.common.api.ApiRepriceLoanRates;
+import exchange.core2.core.common.api.ApiResetFee;
+import exchange.core2.core.common.api.ApiPoolWithdraw;
+import exchange.core2.core.common.api.ApiInsuranceFundWithdraw;
+import exchange.core2.core.common.api.ApiLoanIfWithdraw;
+import exchange.core2.core.common.api.ApiLoanAddCollateral;
+import exchange.core2.core.common.api.ApiLoanReleaseCollateral;
 import exchange.core2.core.common.api.ApiMoveOrder;
 import exchange.core2.core.common.api.ApiLoanCreate;
 import exchange.core2.core.common.api.ApiLoanCrossAddCollateral;
@@ -71,7 +80,8 @@ public class ConformanceExporter {
             "LOAN_BORROW", "LOAN_REPAY", "LOAN_LIQUIDATED", "INTERNAL_TRANSFER",
             "MARGIN_ALERT", "LIQUIDATION_ALERT", "LOAN_MARGIN_CALL",
             "OPEN_POSITION", "CLOSE_POSITION", "LOCKED", "UNLOCKED",
-            "LOCK_PENDING", "UNLOCK_PENDING", "DEPOSIT", "WITHDRAW");
+            "LOCK_PENDING", "UNLOCK_PENDING", "DEPOSIT", "WITHDRAW",
+            "TRANSFER", "LOAN_COLLATERAL_CHANGE", "RESET_FEE");
 
     private static final TreeSortedMap<Long, Long> MM = TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L);
     private static final TreeSortedMap<Long, Long> LEV = TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L);
@@ -132,7 +142,7 @@ public class ConformanceExporter {
                         + " uid=" + r.accountId + " oid=" + r.orderId + " side=" + r.side.name()
                         + " maker=" + (r.isMaker ? 1 : 0) + " px=" + r.price + " lastQty=" + r.lastQty
                         + " lastPx=" + r.lastPrice + " cumQty=" + r.cumulativeQty + " cumQ=" + r.cumulativeQuoteQty
-                        + " comm=" + r.commission);
+                        + " comm=" + r.commission + " commAsset=" + r.commissionAsset);
             }
             @Override public void process(FuturesExecutionReport r) {
                 if (!matchOn) return;
@@ -141,7 +151,7 @@ public class ConformanceExporter {
                         + " maker=" + (r.isMaker ? 1 : 0) + " pos=" + r.positionSide.name() + " cp=" + r.counterpartyId
                         + " px=" + r.price + " lastQty=" + r.lastQty + " lastPx=" + r.lastPx
                         + " cumQty=" + r.cumQty + " cumQ=" + r.cumQuoteQty + " avgPx=" + r.avgPx
-                        + " fee=" + r.fee);
+                        + " fee=" + r.fee + " feeAsset=" + r.feeAssetId);
             }
             @Override public void orderBook(ITradeEventsHandler.OrderBook o) {}
             @Override public void spotExecutionReport(ITradeEventsHandler.SpotExecutionReport r) {}
@@ -372,6 +382,44 @@ public class ConformanceExporter {
                         rc = api.submitCommandAsync(ApiInternalTransfer.builder()
                                 .transactionId(pl(kv, "txid", seq)).fromUid(pl(kv, "from")).toUid(pl(kv, "to"))
                                 .currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
+                        break;
+                    case "CLOSE":
+                        rc = api.submitCommandAsync(ApiClosePosition.builder()
+                                .orderId(pl(kv, "oid")).uid(pl(kv, "uid")).symbol(pi(kv, "sym"))
+                                .action("ASK".equals(kv.get("action")) ? OrderAction.ASK : OrderAction.BID)
+                                .price(pl(kv, "price")).size(pl(kv, "size")).build()).join();
+                        break;
+                    case "LEVERAGE":
+                        rc = api.submitCommandAsync(ApiAdjustLeverage.builder()
+                                .uid(pl(kv, "uid")).symbol(pi(kv, "sym")).leverage((int) pl(kv, "leverage")).build()).join();
+                        break;
+                    case "REPRICE":
+                        rc = api.submitCommandAsync(ApiRepriceLoanRates.builder().build()).join();
+                        break;
+                    case "RESET_FEE":
+                        rc = api.submitCommandAsync(ApiResetFee.builder().build()).join();
+                        break;
+                    case "POOL_WITHDRAW":
+                        rc = api.submitCommandAsync(ApiPoolWithdraw.builder()
+                                .shardId(0).currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
+                        break;
+                    case "IF_WITHDRAW":
+                        rc = api.submitCommandAsync(ApiInsuranceFundWithdraw.builder()
+                                .transactionId(pl(kv, "txid", seq)).shardId(0).symbol(pi(kv, "sym")).currencyAmount(pl(kv, "amount")).build()).join();
+                        rc = null; // 与 Rust 对齐:IF_WITHDRAW 运维 setup,不入 R
+                        break;
+                    case "LIF_WITHDRAW":
+                        rc = api.submitCommandAsync(ApiLoanIfWithdraw.builder()
+                                .shardId(0).currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
+                        rc = null; // 与 Rust 对齐:LIF_WITHDRAW 运维 setup,不入 R
+                        break;
+                    case "LOAN_ADD_COLLATERAL":
+                        rc = api.submitCommandAsync(ApiLoanAddCollateral.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid")).loanId(pl(kv, "loanId")).amount(pl(kv, "amount")).build()).join();
+                        break;
+                    case "LOAN_RELEASE_COLLATERAL":
+                        rc = api.submitCommandAsync(ApiLoanReleaseCollateral.builder()
+                                .transactionId(pl(kv, "txid", seq)).uid(pl(kv, "uid")).loanId(pl(kv, "loanId")).amount(pl(kv, "amount")).build()).join();
                         break;
                     default:
                         throw new IllegalArgumentException("未支持 verb: " + verb);

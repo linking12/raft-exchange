@@ -18,4 +18,8 @@ FE LOCKED uid=1 cur=2 free=999970000 locked=10000
 FE LOCKED uid=1 cur=2 free=999980000 locked=20000
 FE LOCKED uid=2 cur=1 free=999996 locked=2
 FE LOCKED uid=2 cur=1 free=999998 locked=2
+FE TRANSFER uid=1 cur=1 free=2 locked=0
+FE TRANSFER uid=1 cur=2 free=999980000 locked=0
+FE TRANSFER uid=2 cur=1 free=999998 locked=0
+FE TRANSFER uid=2 cur=2 free=20000 locked=0
 FE UNLOCKED uid=1 cur=2 free=999980000 locked=0

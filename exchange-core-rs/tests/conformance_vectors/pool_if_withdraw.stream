@@ -1,0 +1,10 @@
+# 池子/保险基金/loan保险基金的 withdraw 侧:POOL_WITHDRAW / IF_WITHDRAW / LIF_WITHDRAW(镜像各 deposit)。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8008 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+POOL_DEPOSIT cur=2 amount=1000000 txid=1
+POOL_WITHDRAW cur=2 amount=400000 txid=2
+IF_DEPOSIT sym=8008 amount=500 txid=3
+IF_WITHDRAW sym=8008 amount=200 txid=4
+LIF_DEPOSIT cur=2 amount=800 txid=5
+LIF_WITHDRAW cur=2 amount=300 txid=6

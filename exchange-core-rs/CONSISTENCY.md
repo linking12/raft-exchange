@@ -180,7 +180,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **spot 锁事件** `Locked`/`Unlocked` | place 发 Locked;cancel/reduce/reject(`release>0`)、trade 超额退款(`quoteRefund>0`)发 Unlocked | 规则已对齐 Java(2026-09-19 修 3 处发射:sell handler maker 退款 Unlocked、buy handler taker 退款 Unlocked、reject 加 `release>0` 守卫,见 §7.8) | **已进 ③ 逐事件对拍**;金额中性(只补/收敛报告事件,账户/lock 算术不变) |
 | **记账事件** `Deposit`/`Withdraw` | `balance_adjustment` 等会发 | 部分不发 | 排除(非锁/结算类;`INTERNAL_TRANSFER` 已单独进对拍) |
 | **futures 锁事件** `LockPending`/`UnlockPending` | PLACE_ORDER(`:502`)/CLOSE_POSITION(`:863`)R1 预锁发 LockPending;TRADE/REJECT/REDUCE 释放发 UnlockPending | 规则平价:PLACE `risk_engine.rs:105`、CLOSE `:194` 发 LockPending;释放 `:1598`/`:1655` 发 UnlockPending,`free`/`locked` 用 `calculate_locked` 全量重算,与 Java 逐值一致 | **已进 ③ 逐事件对拍**(2026-09-19,199 LOCK_PENDING + 194 UNLOCK_PENDING),无需改生产代码(Rust 早已发);多分片路由键差异不入对拍口径(harness 只比 type/uid/cur/free/locked) |
-| **撮合明细事件(高层报告)** | `SpotExecutionReport`/`FuturesExecutionReport` | 经 `SimpleEventsProcessor` 产出同型报告 | **同步向量已进 ③**(`#!match=on` 的 `MATCH` 段,`ER`/`ERF` 逐字段);异步清算向量仍只靠 ① |
+| **撮合明细事件(高层报告)** | `SpotExecutionReport`/`FuturesExecutionReport` | 经 `SimpleEventsProcessor` 产出同型报告 | **同步 + 异步清算向量都已进 ③**(14 个 `#!match=on`,`MATCH` 段 `ER`/`ERF` 逐字段;含 FORCE/ADL/IF 强平执行报告,顺序两侧确定一致,见 §7.9);golden 用隔离生成 + 自愈规避 exporter 捕获竞态 |
 | **执行报告 exec-id / trade-id** | `seq` 由 disruptor 定(R2 `-seq` + 主 `+seq` 双发) | `results_seq` 单发递增 | `ER`/`ERF` **剔除** `tid`/`eid`(seq 口径刻意不同);taker==maker 共享 id 的不变式由 ① + `simple_events_processor` 单测覆盖 |
 | **`SimpleEventsProcessor` 出口结构** | `accept(cmd,seq)` 双发(`seq<0` R2 只发 fund event、`seq>=0` 发执行报告+fund+行情),`processed` 标志跨两发去重;fund event 分 `takerFundEvents`(isMaker=false)与 `makerFundEventsByShard[]`(isMaker=true,分片) | `process()` 单发(执行报告+fund+行情一次出);fund event 收敛成扁平 `cmd.fund_events`(exec-id 的 isMaker 位恒 false),无 `processed` 标志、无分片 | 单线程/单分片塌缩的必然结果:单发=Java 两发的并集,**发出的 fund event 集合与执行报告逐字段一致**(exec-id 已按上一行剔除);taker/maker 拆分与 isMaker 位仅影响被剔除的 exec-id |
 | **异常隔离** | `accept` try/catch 记日志(多线程下坏 handler 不拖垮撮合) | 无 try/catch:`consume` 在 `apply_one` 内同线程调用,handler panic 直接上抛 | 刻意:确定性状态机里 handler 属纯观测层,吞 panic 会掩盖 bug 且威胁 raft 确定性,故 fail-fast |
@@ -195,7 +195,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 
 > **已消除的差异**:funding receiver 余数 dust 归属曾是刻意差异(Java 按 `LongLongHashMap` hash 序、Rust 按 `BTreeMap` 升序)。2026-09-17 已把 Java `FundingFeeCommandProcessor` 余数分配改为 **uid 升序**(`keySet().toSortedArray()`)= Rust,两侧一致且 Java oracle 更确定。现由 `funding_multi_receiver_dust` / `funding_zero_share_receiver` / `funding_multi_payer_multi_receiver` 三个 events-on 向量对拍。
 
-**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的,共 **24/27** 类):27 种 `FundEventType` 中已纳入 24 类逐事件对拍(2026-09-19 补齐 `Deposit`/`Withdraw`,314 条 DEPOSIT 已对拍;`Withdraw` 已启用,发射与 Deposit 同源已对齐,当前无负向 balance-adjustment 向量触发)。两侧白名单必须与 `fe_allowed` 同步维护。**仍未进 ③ 的 3 类**:`Transfer`(现货成交结算双腿,已由 ① `it_spot_futures_mixed` 逐事件覆盖)、`LoanCollateralChange`、`ResetFee`——开放项。
+**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的):**`FundEventType` 全 27 类都逐事件对拍**(2026-09-19 补齐 `Deposit`/`Withdraw`/`Transfer`/`LoanCollateralChange`/`ResetFee`;1472 条 TRANSFER、314 条 DEPOSIT 等已对拍)。两侧白名单必须与 `fe_allowed`/Java `ALLOWED` 同步维护。**无刻意排除的 fund event 类型**;所有 27 类均有向量触发(见 §7.9 补的 `withdraw_deposit`/`reset_fee` 等)。
 
 ---
 
@@ -284,13 +284,20 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
   3. **多发**:`handle_matcher_reject_reduce_event_exchange` 的 `Unlocked` 缺 `release>0` 守卫(Java `:1121`),IOC_BUDGET 部分成交余量(`release==0`)时 Rust 多发一条 → 加守卫。
 - 修后 `it_spot_futures_mixed` 两个 spot fill 事件序列测试按对齐后行为更新(补 Unlocked)。
 - **futures `LockPending`/`UnlockPending`**(续)+ **告警向量**:两侧再加 `LOCK_PENDING`/`UNLOCK_PENDING` 到白名单——代码深审确认 Rust 早已在 `risk_engine.rs:105`(PLACE)/`:194`(CLOSE)发 LockPending、`:1598`/`:1655` 发 UnlockPending,与 Java 逐值平价,**无需改生产代码**;199 LOCK_PENDING + 194 UNLOCK_PENDING 现逐事件对拍。补 3 个告警向量 `margin_alert_isolated`/`margin_alert_cross`/`loan_margin_call`(单次 `MARK_AT` 触发,各恰一条告警)。
-- 至此 22 类白名单全部有向量覆盖。最终全绿:lib 993 / conformance **89 向量** / e2e 36 / integration 357 / base_parity 78 / diff 9。
+- 至此 22 类白名单全部有向量覆盖。
+
+### 7.9 逐事件对拍收尾(2026-09-19):Deposit/Withdraw、异步清算 ER/ERF 进 ③;修 Java reprice 分叉
+
+- **Deposit/Withdraw 进 ③**:深审确认两侧发射同源(仅 SUCCESS 时按 `price>0` 发 Deposit 否则 Withdraw),`fe_allowed` 加此二类,314 条 DEPOSIT 逐事件对拍。`fe_allowed` 现 24/27 类(仅剩 `Transfer`/`LoanCollateralChange`/`ResetFee` 未进,Transfer 由 ① 覆盖)。
+- **异步清算/ADL 的 ER/ERF 进 ③**:给 8 个 events-on 清算/ADL 向量(`liquidation_isolated`/`adl`/`adl_multi_counterparty`/`liquidation_cross_multi_symbol`/`futures_if_takeover`/`hedge_liquidation_one_leg`/`liquidation_force_if_adl_cascade`/`futures_tiered_maintenance_liquidation`)加 `#!match=on`。验证:FORCE/ADL/IF 强平执行报告的 ER/ERF **顺序两侧确定一致**(如 FORCE 单 `ERF TRADE FILLED oid=<liq id>`);共 14 个 `#!match=on` 向量。exporter 捕获竞态由隔离生成 + 自愈循环规避。
+- **修 Java reprice 分叉(§5 raft 重启 loan 分叉根因)**:`GroupingProcessor` 让 `REPRICE_LOAN_RATES` **独占 group**(组首+组尾各断一次边界,`repriceExclusiveGroup`),保证其 R2 利率写在下条 loan 命令 R1 读前冲完,不再随 live/replay 分组漂移而分叉。**Java 引擎 bug,Rust 顺序管线天然正确**;顺带关闭潜在 Java-Rust 平价差(Java 现也恒读 post-reprice)。Java loan ITs(17)+ ConservationFuzz(8)绿。见 [[reprice-r2-r1-ordering-hazard]]。
+- 最终全绿:lib **993** / conformance **89 向量**(14 个 `#!match=on`) / e2e 36 / integration 357 / base_parity 78 / diff 9。
 
 ---
 
 ## 8. 命令流 DSL 参考
 
-`.stream` 每行一条:`VERB key=value key=value …`;`#` 开头为注释;首部 `#!events=off` 表示该向量只对拍 result+state(异步清算向量用);`#!match=on` 额外对拍撮合执行报告 `MATCH` 段(仅确定性同步向量,见 §4.3/§6)。两侧解释器(`tests/conformance.rs` / `ConformanceExporter.java`)必须同步支持每个 verb。
+`.stream` 每行一条:`VERB key=value key=value …`;`#` 开头为注释;首部 `#!events=off` 表示该向量只对拍 result+state(仅随机 fuzz 清算向量用);`#!match=on` 额外对拍撮合执行报告 `MATCH` 段(确定性同步向量 + 确定性异步清算/ADL 向量,见 §4.3/§6/§7.9)。两侧解释器(`tests/conformance.rs` / `ConformanceExporter.java`)必须同步支持每个 verb。
 
 | VERB | 字段 | 语义 | 发 R 行? |
 |------|------|------|:--:|
