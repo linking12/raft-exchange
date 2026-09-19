@@ -355,12 +355,13 @@ impl ExchangeCore {
         }
         for sym in symbols {
             let notional = self.risk.liquidation_service.notionals.get(&sym);
+            let to_currency = |amt: i64| self.size_price_to_currency(amt, sym).map(|(_, v)| v).unwrap_or(amt);
             r.futures.insert(
                 sym,
                 FuturesIfEntry {
-                    available: notional.map(|n| n.available).unwrap_or(0),
-                    reserved: notional.map(|n| n.reserved).unwrap_or(0),
-                    position_value: position_values.get(&sym).copied().unwrap_or(0),
+                    available: to_currency(notional.map(|n| n.available).unwrap_or(0)),
+                    reserved: to_currency(notional.map(|n| n.reserved).unwrap_or(0)),
+                    position_value: to_currency(position_values.get(&sym).copied().unwrap_or(0)),
                 },
             );
         }

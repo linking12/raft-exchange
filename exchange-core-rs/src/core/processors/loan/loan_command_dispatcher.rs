@@ -747,11 +747,11 @@ impl LoanCommandDispatcher {
             let taken_over =
                 engine.loan_service.take_over_cross_loan(taker_up, target_loan_id, cmd.timestamp, ssp, &engine.last_price_cache);
             if taken_over {
-                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.outstanding_principal, l.accumulated_interest, l.cum_interest_paid));
-                if let Some((lid, lcur, luid, prin, intr, cip)) = liq {
-                    Self::push_cross_loan_liquidated(cmd, engine, ssp, taker_up, lid, lcur, luid, prin, intr, cip, selling_currency, ts);
-                }
+                let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.cum_interest_paid));
                 Self::close_and_recycle_cross_loan(taker_up, target_loan_id);
+                if let Some((lid, lcur, luid, cip)) = liq {
+                    Self::push_cross_loan_liquidated(cmd, engine, ssp, taker_up, lid, lcur, luid, 0, 0, cip, selling_currency, ts);
+                }
             } else if traded_size > 0 {
                 let liq = taker_up.cross_loans.get(&target_loan_id).map(|l| (l.loan_id, l.loan_currency, l.uid, l.outstanding_principal, l.accumulated_interest, l.cum_interest_paid));
                 if let Some((lid, lcur, luid, prin, intr, cip)) = liq {
