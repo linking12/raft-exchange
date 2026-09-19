@@ -190,7 +190,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **`state_hash`** | Java 自己的 hash | 逐字段折叠、是超集 | 不互比;跨实现用 ③ 的语义状态摘要 |
 | **现货普通 FOK(`OrderType.FOK`)** | **未实现**(`// TODO FOK support`,整单 reject) | 已实现 fill-or-kill | Rust 更完整;差分模糊不随机普通 FOK(`fok_kill` 手写覆盖)。**`FOK_BUDGET`/`IOC_BUDGET` 两侧都实现、已对拍一致** |
 | **`MARKPRICE_ADJUSTMENT` 的 `price<=0`** | 无守卫:置 markPrice=0/负值,返回 SUCCESS(后续期货 place 再因 markPrice 无效被拒) | `price<=0` 直接 `RISK_INVALID_AMOUNT` 拒绝,markPrice 不变 | 刻意:Rust 更严,不接受无意义的非正 mark price(确定性状态机不写坏价);两侧终态资金一致,仅 result code 差 |
-| **`SETTLE_FUNDINGFEES` 的 `size<=0`** | 拥有 shard 上 `preProcessCommand` 无条件覆写为 `VALID_FOR_MATCHING_ENGINE`(疑 Java 覆写 bug) | 返回 `RISK_INVALID_AMOUNT` | Rust 更正确;不可达(funding size=区间分母恒>0),仅分支级 result code 差 |
+| ~~**`SETTLE_FUNDINGFEES` 的 `size<=0`**~~ **已对齐(2026-09-19)** | ~~无条件覆写为 VALID~~ **已修**:`preProcessCommand` 仅在 collectInput 未设错误码时才放行(保留 `RISK_INVALID_AMOUNT`/`RISK_MARKPRICE_NOT_AVAILABLE`) | 返回 `RISK_INVALID_AMOUNT` | 两侧现一致返回 `RISK_INVALID_AMOUNT`(Java 侧覆写 bug 已修,funding/perp ITs 绿) |
 | **`add_currency` 重复币种** | skip(返回 false,保留原 spec) | 覆写(幂等重放同值无碍) | 结果码两侧都不暴露(batch binary 忽略返回);重复添加同币种的幂等性细微差,非资金/行为可观测 |
 | **`NO_RISK_PROCESSING` 风控短路模式** | `cfgIgnoreRiskProcessing`(`RiskEngine.java:411` placeOrderRiskCheck / `:836` closePositionRiskCheck)置位时短路返回 `VALID_FOR_MATCHING_ENGINE`,跳过余额锁/保证金检查(测试/高频模式) | **刻意不移植**:无此配置,恒走全量风控 | Rust 更严格、绝不放行无锁订单。确定性 Raft 状态机跳过风控会破坏资金完整性,故不移植;正常部署不用该模式,无资金影响(2026-09-19 三路径深审确认) |
 | **批处理 R1/R2 时序** | 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(须 barrier,否则 spurious NSF) | 单管线 R2 恒先于下条 R1 | exporter 每命令 flush,比 settled 语义 |
@@ -302,7 +302,8 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 三组只读子代理逐方法对比报表/查询层、命令校验+result code、两步处理器 apply。**校验层与两步 apply 基本零分歧**(loan 全家、funding/ADL/IF/settle/reprice apply 全对齐)。修 2 处真分歧:
 - **`insurance_fund` 报表缩放**(`reports.rs:query_insurance_fund`):`available`/`reserved`/`position_value` 原返回 raw product-scale,Rust 自己的 `total_balance` 与 Java 都缩放到 currency-scale → 内部不一致。已改为经 `size_price_to_currency` 缩放。纯外部报表(无消费者/测试/不进 ③/不影响守恒),但外部监控数值现正确。
 - **cross-loan LIF-takeover 事件快照时序**(`loan_command_dispatcher.rs` taken_over 分支):原在 `close_and_recycle` **前**发 `LOAN_LIQUIDATED`(principal/interest 非零、LTV 含被吸收 loan);Java 在**后**发、`snapPrincipal=snapInterest=0`、LTV 排除。已改为**先 close 再 push(0,0)**(对齐 Java `LoanCommandDispatcher.java:819-856`)。资金/守恒本就一致,仅 3 个事件字段;非资金。
-- **刻意/记录(不改)**:`MARKPRICE_ADJUSTMENT price<=0`(Rust 更严拒绝)、`SETTLE_FUNDINGFEES size<=0`(Rust 更对,不可达)、`add_currency` 重复(skip vs overwrite)——均入 §6。`state_hash` 不互比、分片聚合、`symbol_to_users` lazy 均已在 §6。
+- **修 Java `SETTLE_FUNDINGFEES size<=0` 覆写 bug**:`RiskEngine.preProcessCommand` 原无条件把结果覆写成 `VALID_FOR_MATCHING_ENGINE`、掩盖 collectInput 设的 `RISK_INVALID_AMOUNT`;已改为仅未设错误码时才放行 → 两侧现一致返回 `RISK_INVALID_AMOUNT`(funding/perp ITs 绿)。
+- **刻意/记录(不改)**:`MARKPRICE_ADJUSTMENT price<=0`(Rust 更严拒绝)、`add_currency` 重复(skip vs overwrite)——入 §6。`state_hash` 不互比、分片聚合、`symbol_to_users` lazy 均已在 §6。
 
 ---
 
