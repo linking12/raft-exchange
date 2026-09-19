@@ -303,7 +303,11 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     return false;
                 }
                 fundingFeeProcessor.collectInput(cmd);
-                if (shardId == 0) {
+                // 只有 collectInput 未拒绝(size<=0 → RISK_INVALID_AMOUNT / 缺喂价 → RISK_MARKPRICE_NOT_AVAILABLE)时
+                // 才在拥有 shard 上放行,否则错误码会被覆写掩盖(与 Rust fundingfee_command_processor 一致)。
+                if (shardId == 0
+                        && cmd.resultCode != CommandResultCode.RISK_INVALID_AMOUNT
+                        && cmd.resultCode != CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE) {
                     cmd.resultCode = CommandResultCode.VALID_FOR_MATCHING_ENGINE;
                 }
                 return false;
