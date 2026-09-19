@@ -14,5 +14,9 @@ FEE 2 300
 EVENTS
 FE FUNDINGFEE_SETTLEMENT uid=1 cur=2 free=19750 locked=150
 FE FUNDINGFEE_SETTLEMENT uid=2 cur=2 free=3999650 locked=150
+FE LOCK_PENDING uid=1 cur=2 free=19700 locked=300
+FE LOCK_PENDING uid=2 cur=2 free=3999700 locked=300
 FE OPEN_POSITION uid=1 cur=2 free=19750 locked=150
 FE OPEN_POSITION uid=2 cur=2 free=3999650 locked=150
+FE UNLOCK_PENDING uid=1 cur=2 free=20000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=4000000 locked=0

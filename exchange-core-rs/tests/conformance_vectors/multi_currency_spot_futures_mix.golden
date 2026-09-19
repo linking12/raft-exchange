@@ -20,5 +20,9 @@ POS 6 201 SHORT 3 3000 300 0
 EVENTS
 FE LOCKED uid=1 cur=2 free=0 locked=100000
 FE LOCKED uid=2 cur=3 free=0 locked=2
+FE LOCK_PENDING uid=5 cur=1 free=9700 locked=300
+FE LOCK_PENDING uid=6 cur=1 free=9700 locked=300
 FE OPEN_POSITION uid=5 cur=1 free=9700 locked=300
 FE OPEN_POSITION uid=6 cur=1 free=9700 locked=300
+FE UNLOCK_PENDING uid=5 cur=1 free=10000 locked=0
+FE UNLOCK_PENDING uid=6 cur=1 free=10000 locked=0

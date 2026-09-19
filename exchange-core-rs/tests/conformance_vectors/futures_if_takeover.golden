@@ -12,6 +12,11 @@ FEE 2 10
 EVENTS
 FE IF_POSITION_CLOSE uid=1 cur=2 free=5000 locked=0
 FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
+FE LOCK_PENDING uid=1 cur=2 free=4940 locked=60
+FE LOCK_PENDING uid=2 cur=2 free=49940 locked=60
 FE OPEN_POSITION uid=1 cur=2 free=4950 locked=50
 FE OPEN_POSITION uid=2 cur=2 free=49940 locked=50
 FE PNL_SETTLEMENT uid=1 cur=2 free=4960 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=4950 locked=50
+FE UNLOCK_PENDING uid=1 cur=2 free=5000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=50000 locked=0

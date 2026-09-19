@@ -17,6 +17,14 @@ A 4 2 1000000
 POS 4 8004 LONG 4 4400 400 0
 EVENTS
 FE CLOSE_POSITION uid=1 cur=2 free=999400 locked=600
+FE LOCK_PENDING uid=1 cur=2 free=999000 locked=1000
+FE LOCK_PENDING uid=1 cur=2 free=999000 locked=1000
+FE LOCK_PENDING uid=2 cur=2 free=999000 locked=1000
+FE LOCK_PENDING uid=4 cur=2 free=999560 locked=440
 FE OPEN_POSITION uid=1 cur=2 free=999000 locked=1000
 FE OPEN_POSITION uid=2 cur=2 free=999000 locked=1000
 FE OPEN_POSITION uid=4 cur=2 free=999600 locked=400
+FE UNLOCK_PENDING uid=1 cur=2 free=1000000 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=999000 locked=1000
+FE UNLOCK_PENDING uid=2 cur=2 free=1000000 locked=0
+FE UNLOCK_PENDING uid=4 cur=2 free=1000000 locked=0

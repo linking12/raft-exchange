@@ -6,6 +6,9 @@ R 8 SUCCESS
 STATE
 A 1 2 100000000
 EVENTS
+FE LOCK_PENDING uid=1 cur=2 free=99999923 locked=77
+FE UNLOCK_PENDING uid=1 cur=2 free=100000000 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=99999953 locked=47
 MATCH
 ERF NEW NEW uid=1 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=1100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
 ERF REDUCE NEW uid=1 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=0 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0

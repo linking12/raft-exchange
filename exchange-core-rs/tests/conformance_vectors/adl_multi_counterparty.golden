@@ -32,6 +32,14 @@ FE CLOSE_POSITION uid=3 cur=2 free=7999890 locked=100
 FE CLOSE_POSITION uid=3 cur=2 free=7999930 locked=50
 FE CLOSE_POSITION uid=3 cur=2 free=7999970 locked=0
 FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
+FE LOCK_PENDING uid=1 cur=2 free=4820 locked=180
+FE LOCK_PENDING uid=2 cur=2 free=49940 locked=60
+FE LOCK_PENDING uid=3 cur=2 free=7999820 locked=180
+FE LOCK_PENDING uid=3 cur=2 free=7999840 locked=160
+FE LOCK_PENDING uid=3 cur=2 free=7999880 locked=110
+FE LOCK_PENDING uid=3 cur=2 free=7999920 locked=60
+FE LOCK_PENDING uid=4 cur=2 free=49940 locked=60
+FE LOCK_PENDING uid=6 cur=2 free=49940 locked=60
 FE OPEN_POSITION uid=1 cur=2 free=4820 locked=150
 FE OPEN_POSITION uid=2 cur=2 free=49950 locked=50
 FE OPEN_POSITION uid=3 cur=2 free=7999850 locked=150
@@ -41,3 +49,12 @@ FE PNL_SETTLEMENT uid=1 cur=2 free=4850 locked=0
 FE PNL_SETTLEMENT uid=2 cur=2 free=50040 locked=0
 FE PNL_SETTLEMENT uid=4 cur=2 free=50040 locked=0
 FE PNL_SETTLEMENT uid=6 cur=2 free=50040 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=4820 locked=150
+FE UNLOCK_PENDING uid=1 cur=2 free=5000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=50000 locked=0
+FE UNLOCK_PENDING uid=3 cur=2 free=7999850 locked=150
+FE UNLOCK_PENDING uid=3 cur=2 free=7999890 locked=100
+FE UNLOCK_PENDING uid=3 cur=2 free=7999930 locked=50
+FE UNLOCK_PENDING uid=3 cur=2 free=8000000 locked=0
+FE UNLOCK_PENDING uid=4 cur=2 free=50000 locked=0
+FE UNLOCK_PENDING uid=6 cur=2 free=50000 locked=0

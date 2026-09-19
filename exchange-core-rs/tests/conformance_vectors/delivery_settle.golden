@@ -10,7 +10,11 @@ A 1 2 24900
 A 2 2 14800
 FEE 2 300
 EVENTS
+FE LOCK_PENDING uid=1 cur=2 free=19700 locked=300
+FE LOCK_PENDING uid=2 cur=2 free=19700 locked=300
 FE OPEN_POSITION uid=1 cur=2 free=19800 locked=100
 FE OPEN_POSITION uid=2 cur=2 free=19700 locked=100
 FE PNL_SETTLEMENT uid=1 cur=2 free=24900 locked=0
 FE PNL_SETTLEMENT uid=2 cur=2 free=14800 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=20000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=20000 locked=0
