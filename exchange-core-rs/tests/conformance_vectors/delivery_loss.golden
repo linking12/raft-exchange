@@ -19,3 +19,4 @@ FE PNL_SETTLEMENT uid=1 cur=2 free=998000 locked=0
 FE PNL_SETTLEMENT uid=2 cur=2 free=1002000 locked=0
 FE UNLOCK_PENDING uid=1 cur=2 free=1000000 locked=0
 FE UNLOCK_PENDING uid=2 cur=2 free=1000000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=1000000 locked=0

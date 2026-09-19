@@ -13,8 +13,8 @@ use exchange_core_rs::core::common::order_type::OrderType;
 use exchange_core_rs::core::common::symbol_loan_specification::SymbolLoanSpecification;
 use exchange_core_rs::core::common::symbol_type::SymbolType;
 use exchange_core_rs::core::exchange_api::{
-    CancelOrderRequest, ExchangeApi, MarginAdjustmentRequest, MoveOrderRequest, PlaceFuturesOrderRequest, PlaceOrderRequest,
-    ReduceOrderRequest,
+    CancelOrderRequest, ClosePositionRequest, ExchangeApi, MarginAdjustmentRequest, MoveOrderRequest, PlaceFuturesOrderRequest,
+    PlaceOrderRequest, ReduceOrderRequest, RepriceLoanRatesRequest,
 };
 use exchange_core_rs::core::common::position_mode::PositionMode;
 use exchange_core_rs::core::fund_events_handler::{FundEventReport, FundEventsHandler};
@@ -28,11 +28,11 @@ impl TradeEventsHandler for ErRecorder {
     fn order_book(&mut self, _ob: OrderBook) {}
     fn spot_execution_report(&mut self, r: SpotExecutionReport) {
         self.sink.borrow_mut().push(format!(
-            "ER {} {} uid={} oid={} side={} maker={} px={} lastQty={} lastPx={} cumQty={} cumQ={} comm={}",
+            "ER {} {} uid={} oid={} side={} maker={} px={} lastQty={} lastPx={} cumQty={} cumQ={} comm={} commAsset={}",
             snake(&format!("{:?}", r.execution_type)),
             snake(&format!("{:?}", r.order_status)),
             r.account_id, r.order_id, snake(&format!("{:?}", r.side)), if r.is_maker { 1 } else { 0 },
-            r.price, r.last_qty, r.mark_price, r.cumulative_qty, r.cumulative_quote_qty, r.commission
+            r.price, r.last_qty, r.mark_price, r.cumulative_qty, r.cumulative_quote_qty, r.commission, r.commission_asset
         ));
     }
     fn futures_execution_report(&mut self, r: FuturesExecutionReport) {
@@ -41,11 +41,11 @@ impl TradeEventsHandler for ErRecorder {
             PositionMode::Hedge => "HEDGE",
         };
         self.sink.borrow_mut().push(format!(
-            "ERF {} {} uid={} oid={} side={} maker={} pos={} cp={} px={} lastQty={} lastPx={} cumQty={} cumQ={} avgPx={} fee={}",
+            "ERF {} {} uid={} oid={} side={} maker={} pos={} cp={} px={} lastQty={} lastPx={} cumQty={} cumQ={} avgPx={} fee={} feeAsset={}",
             snake(&format!("{:?}", r.execution_type)),
             snake(&format!("{:?}", r.order_status)),
             r.user_id, r.order_id, snake(&format!("{:?}", r.side)), if r.is_maker { 1 } else { 0 },
-            pos, r.counterparty_id, r.price, r.last_qty, r.last_px, r.cum_qty, r.cum_quote_qty, r.avg_px, r.fee
+            pos, r.counterparty_id, r.price, r.last_qty, r.last_px, r.cum_qty, r.cum_quote_qty, r.avg_px, r.fee, r.fee_asset_id
         ));
     }
 }
@@ -156,6 +156,9 @@ fn fe_allowed(t: FundEventType) -> bool {
             | UnlockPending
             | Deposit
             | Withdraw
+            | Transfer
+            | LoanCollateralChange
+            | ResetFee
     )
 }
 
@@ -175,7 +178,7 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>, Vec<String>) 
     let mut results = Vec::new();
     let mut seq = 0i64;
 
-    let no_r = |v: &str| matches!(v, "MARK_AT" | "SCAN" | "IF_DEPOSIT" | "LIF_DEPOSIT");
+    let no_r = |v: &str| matches!(v, "MARK_AT" | "SCAN" | "IF_DEPOSIT" | "LIF_DEPOSIT" | "IF_WITHDRAW" | "LIF_WITHDRAW");
     for line in stream.lines() {
         let Some((verb, kv)) = parse_line(line) else { continue };
         let rc: Option<CommandResultCode> = match verb.as_str() {
@@ -431,6 +434,23 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>, Vec<String>) 
                 i64_of(&kv, "amount"),
                 opt_i64(&kv, "txid", 0),
             )),
+            "CLOSE" => Some(api.close_position(ClosePositionRequest {
+                order_id: i64_of(&kv, "oid"),
+                uid: i64_of(&kv, "uid"),
+                symbol: i32_of(&kv, "sym"),
+                action: action_of(kv.get("action").map(String::as_str)),
+                price: i64_of(&kv, "price"),
+                size: i64_of(&kv, "size"),
+                order_type: order_type_of(kv.get("type").map(String::as_str)),
+            })),
+            "LEVERAGE" => Some(api.leverage_adjustment(i64_of(&kv, "uid"), i32_of(&kv, "sym"), i32_of(&kv, "leverage"))),
+            "REPRICE" => Some(api.submit_reprice_loan_rates(RepriceLoanRatesRequest { timestamp: opt_i64(&kv, "ts", 0) })),
+            "RESET_FEE" => Some(api.reset_fee(opt_i64(&kv, "txid", 0))),
+            "POOL_WITHDRAW" => Some(api.pool_withdraw(i32_of(&kv, "cur"), i64_of(&kv, "amount"), opt_i64(&kv, "txid", 0))),
+            "IF_WITHDRAW" => Some(api.insurance_fund_withdraw(i32_of(&kv, "sym"), i64_of(&kv, "amount"), opt_i64(&kv, "txid", 0))),
+            "LIF_WITHDRAW" => Some(api.loan_if_withdraw(i32_of(&kv, "cur"), i64_of(&kv, "amount"), opt_i64(&kv, "txid", 0))),
+            "LOAN_ADD_COLLATERAL" => Some(api.loan_add_collateral(opt_i64(&kv, "txid", 0), i64_of(&kv, "uid"), i64_of(&kv, "loanId"), i64_of(&kv, "amount"), opt_i64(&kv, "ts", 0))),
+            "LOAN_RELEASE_COLLATERAL" => Some(api.loan_release_collateral(opt_i64(&kv, "txid", 0), i64_of(&kv, "uid"), i64_of(&kv, "loanId"), i64_of(&kv, "amount"), opt_i64(&kv, "ts", 0))),
             other => panic!("unsupported command verb: {other}"),
         };
         if let Some(rc) = rc {

@@ -21,4 +21,10 @@ FE DEPOSIT uid=4 cur=1 free=1000000 locked=0
 FE LOCKED uid=1 cur=2 free=999979600 locked=20400
 FE LOCKED uid=2 cur=1 free=999999 locked=1
 FE LOCKED uid=4 cur=1 free=999999 locked=1
+FE TRANSFER uid=1 cur=1 free=2 locked=0
+FE TRANSFER uid=1 cur=2 free=999979800 locked=0
+FE TRANSFER uid=2 cur=1 free=999999 locked=0
+FE TRANSFER uid=2 cur=2 free=10000 locked=0
+FE TRANSFER uid=4 cur=1 free=999999 locked=0
+FE TRANSFER uid=4 cur=2 free=10200 locked=0
 FE UNLOCKED uid=1 cur=2 free=999979800 locked=0

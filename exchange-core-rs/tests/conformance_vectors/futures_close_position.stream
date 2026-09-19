@@ -1,0 +1,15 @@
+# CLOSE_POSITION 命令:期货持多头后经 CLOSE 平仓(对手方 maker 挂 BID 承接)。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=8008 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=10
+MARK sym=8008 price=1000
+USER uid=1
+USER uid=2
+USER uid=3
+BAL uid=1 cur=2 amount=1000000 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+BAL uid=3 cur=2 amount=1000000 txid=3
+PLACE_FUT oid=1 uid=2 sym=8008 price=1000 size=10 action=ASK margin=ISOLATED leverage=1
+PLACE_FUT oid=2 uid=1 sym=8008 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+PLACE_FUT oid=3 uid=3 sym=8008 price=1000 size=10 action=BID margin=ISOLATED leverage=1
+CLOSE oid=4 uid=1 sym=8008 action=ASK price=1000 size=10 type=GTC

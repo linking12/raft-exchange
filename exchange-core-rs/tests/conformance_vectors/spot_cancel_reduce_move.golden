@@ -17,6 +17,10 @@ FE DEPOSIT uid=1 cur=1 free=1000000 locked=0
 FE DEPOSIT uid=2 cur=2 free=1000000 locked=0
 FE LOCKED uid=1 cur=1 free=999990 locked=10
 FE LOCKED uid=2 cur=2 free=999550 locked=450
+FE TRANSFER uid=1 cur=1 free=999993 locked=2
+FE TRANSFER uid=1 cur=2 free=450 locked=0
+FE TRANSFER uid=2 cur=1 free=5 locked=0
+FE TRANSFER uid=2 cur=2 free=999550 locked=0
 FE UNLOCKED uid=1 cur=1 free=999993 locked=7
 FE UNLOCKED uid=1 cur=1 free=999995 locked=0
 MATCH

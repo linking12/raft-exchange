@@ -28,5 +28,9 @@ FE LOCK_PENDING uid=5 cur=1 free=9700 locked=300
 FE LOCK_PENDING uid=6 cur=1 free=9700 locked=300
 FE OPEN_POSITION uid=5 cur=1 free=9700 locked=300
 FE OPEN_POSITION uid=6 cur=1 free=9700 locked=300
+FE TRANSFER uid=1 cur=2 free=0 locked=0
+FE TRANSFER uid=1 cur=3 free=2 locked=0
+FE TRANSFER uid=2 cur=2 free=100000 locked=0
+FE TRANSFER uid=2 cur=3 free=0 locked=0
 FE UNLOCK_PENDING uid=5 cur=1 free=10000 locked=0
 FE UNLOCK_PENDING uid=6 cur=1 free=10000 locked=0
