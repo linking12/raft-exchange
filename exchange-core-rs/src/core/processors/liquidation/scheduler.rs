@@ -1,6 +1,9 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::cmd::order_command_type::OrderCommandType;
-use crate::core::processors::liquidation::command_submitter::CommandSubmitter;
+use crate::core::processors::liquidation::command_submitter::{CommandSubmitter, CommandSubmitterHandle};
 
 pub fn covered_by_scan_slice(cmd: &OrderCommand, uid: i64) -> bool {
     if cmd.command != OrderCommandType::LiquidationScan || cmd.size <= 0 {
@@ -17,7 +20,7 @@ pub struct LiquidationScheduler {
     pub shard_id: i32,
     pub is_running: bool,
 
-    command_submitter: CommandSubmitter,
+    command_submitter: CommandSubmitterHandle,
 }
 
 impl LiquidationScheduler {
@@ -28,12 +31,12 @@ impl LiquidationScheduler {
             reprice_every_n_ticks: reprice_every_n_ticks.max(1),
             shard_id,
             is_running: false,
-            command_submitter: CommandSubmitter::default(),
+            command_submitter: CommandSubmitterHandle::default(),
         }
     }
 
-    pub fn set_command_submitter(&mut self, cb: Box<dyn FnMut(OrderCommand)>) {
-        self.command_submitter.set(cb);
+    pub fn set_command_submitter(&mut self, submitter: Rc<RefCell<dyn CommandSubmitter>>) {
+        self.command_submitter.set(submitter);
     }
 
     pub fn run_one_iteration(&mut self, timestamp: i64) {
@@ -72,8 +75,7 @@ mod tests {
 
     fn attach_collector(s: &mut LiquidationScheduler) -> Rc<RefCell<Vec<OrderCommand>>> {
         let collected = Rc::new(RefCell::new(Vec::new()));
-        let sink = collected.clone();
-        s.set_command_submitter(Box::new(move |cmd| sink.borrow_mut().push(cmd)));
+        s.set_command_submitter(Rc::new(RefCell::new(crate::core::processors::liquidation::command_submitter::VecCommandSink(collected.clone()))));
         collected
     }
 

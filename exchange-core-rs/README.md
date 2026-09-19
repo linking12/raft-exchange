@@ -44,11 +44,10 @@ impl FundEventsHandler for MyFundHandler {
 
 let mut api = ExchangeApi::new();
 
-// 装配结果消费者:SimpleEventsProcessor 把命令解码成报告,分发给两个 handler
-let mut events = SimpleEventsProcessor::new(MyTradeHandler, MyFundHandler);
-api.core().with_results_consumer(Box::new(move |cmd, seq, ssp, ups| {
-    events.process(cmd, seq, ssp, ups);
-}));
+// 装配结果消费者:回调是 trait(Java 接口风格)。SimpleEventsProcessor 已实现 ResultsConsumer,
+// 直接当 consumer 挂上,把命令解码成报告分发给两个 handler。
+let events = SimpleEventsProcessor::new(MyTradeHandler, MyFundHandler);
+api.core().with_results_consumer(Box::new(events));
 
 // 配置:货币(+精度)/ symbol / 开户 / 充值
 api.add_currency(1, 1);
@@ -119,19 +118,21 @@ let _h   = api.state_hash();                    // 多节点/快照往返比对
 
 ### 接入 Raft 状态机
 
-引擎级操作(级联去向、周期扫描、快照)都经 `api.core()`;`with_command_submitter` 收工厂,内层闭包等价 Java 的 `LiquidationCommandSubmitter.submit(cmd)`(单节点默认已装好,集群下改成交 Raft):
+引擎级操作(级联去向、周期扫描、快照)都经 `api.core()`;`with_command_submitter` 收一个实现 `CommandSubmitter` trait 的**共享实例**(`Rc<RefCell<dyn CommandSubmitter>>`,三个内部引擎共享),等价 Java 的 `LiquidationCommandSubmitter.submit(cmd)`(单节点默认已装好,集群下改成交 Raft):
 
 ```rust
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+use exchange_core_rs::core::processors::liquidation::command_submitter::CommandSubmitter;
 
-// 级联去向:强平/loan 次生命令交 raft 而非就地 apply(外层工厂只因 Box<dyn FnMut> 不能 clone)
+// 级联去向:实现 CommandSubmitter,把强平/loan 次生命令交 raft 而非就地 apply(Java 接口风格)
+struct RaftSubmitter { queue: Rc<RefCell<VecDeque<OrderCommand>>> }
+impl CommandSubmitter for RaftSubmitter {
+    fn submit(&mut self, cmd: OrderCommand) { self.queue.borrow_mut().push_back(cmd); }  // 实际:raft.propose(cmd)
+}
+
 let queue: Rc<RefCell<VecDeque<OrderCommand>>> = Rc::new(RefCell::new(VecDeque::new()));
-let q = queue.clone();
-api.core().with_command_submitter(move || {
-    let q = q.clone();
-    Box::new(move |cmd: OrderCommand| { q.borrow_mut().push_back(cmd); })  // 实际:raft.propose(cmd)
-});
+api.core().with_command_submitter(Rc::new(RefCell::new(RaftSubmitter { queue: queue.clone() })));
 
 // apply 循环:自身命令 + raft 回流的级联命令,都喂回引擎
 api.submit(user_cmd);
@@ -194,7 +195,7 @@ Java `ExchangeApi` 是 Disruptor 之上的**异步提交层**(`RingBuffer` + `Co
 - **命令覆盖完整**:Rust `OrderCommandType` 覆盖全部 **43 个业务命令码**;Java `OrderCommandType` 有 51 个,多出的 8 个全是**基础设施/传输类、非业务**——`GROUPING_CONTROL`/`SHUTDOWN_SIGNAL`/`RESERVED_COMPRESSED`(Disruptor/journal 生命周期,单管线 N/A)、`BINARY_DATA_QUERY`(Rust 直接调报表访问器)、`PERSIST_STATE_{MATCHING,RISK}` + `RECOVER_STATE_{MATCHING,RISK}`(这 4 个 Rust 合并进 `persist()` / `recover()` 两个方法,一次处理 RE+ME 两模块)。**44 个 `Api*` 业务命令全部有对应**。
 - **便捷方法**(有专用封装的高频操作):`add_user`/`balance_adjustment`/`place_order`/`place_futures_order`/`cancel_order`/`move_order`/`reduce_order`/`close_position`/`margin_adjustment`/`leverage_adjustment`/`adjust_position_mode`/`set_mark_price`/`suspend_user`/`resume_user`;初始化批量入口 `add_currencies`/`add_symbols`/`add_accounts`/`add_loans`(对齐 Java `BatchAdd*Command`)。
 - **通用入口** `submit(OrderCommand)`:loan(`LoanCreate`/`LoanRepay`/`LoanCross*`/…)、`PoolDeposit`/`PoolWithdraw`、`IfDeposit`/`IfWithdraw`、`SettlePnl`/`SettleFundingfees`、`RepriceLoanRates`、`InternalTransfer`、`ResetFee`、`Reset` 等经此提交(与 Java 逐命令对拍一致,只是不各配一个便捷 wrapper)。
-- **装配**:`ExchangeApi::new()` 自带默认 core,经 `api.core()` 挂两个回调 `with_results_consumer`(results 处理器,配 `SimpleEventsProcessor` + 自定义 `TradeEventsHandler`/`FundEventsHandler`)、`with_command_submitter`(级联去向)= Java 侧 Disruptor handler 链接线,在单管线里收敛成显式回调;快照 `persist`/`recover`、`tick_liquidation_scheduler` 同样经 `api.core()`。
+- **装配**:`ExchangeApi::new()` 自带默认 core,经 `api.core()` 挂两个回调 trait(Java 接口风格,非闭包):`with_results_consumer`(实现 `ResultsConsumer`,`SimpleEventsProcessor` 已直接实现,配自定义 `TradeEventsHandler`/`FundEventsHandler`)、`with_command_submitter`(实现 `CommandSubmitter`,`Rc<RefCell<dyn ...>>` 共享实例,级联去向)= Java 侧 Disruptor handler 链接线,在单管线里收敛成 trait 回调;快照 `persist`/`recover`、`tick_liquidation_scheduler` 同样经 `api.core()`。
 - **快照** `persist(snapshot_id, instance_id)` / `recover(...)` 经持有的 `SerializationProcessor` = Java `submitPersistCommandAsync`/`submitRecoverCommandAsync`(见模块表 `ExchangeCore`)。
 - **报表**:直接访问器 `total_balance`/`single_user`/`fee_report`/`insurance_fund`/`loan_platform`/`symbol_currency`/`state_hash` = Java `processReport`/`submitQueryAsync`。
 - **不移植**:Java 异步层(`submitCommandAsync`/`FullResponse`/`submitBatchAsync`/回调/`RingBuffer`)、`groupingControl`(Disruptor 批处理控制)——单线程顺序管线下 N/A。
@@ -221,6 +222,8 @@ Java `ExchangeApi` 是 Disruptor 之上的**异步提交层**(`RingBuffer` + `Co
 两套独立实现同一撮合引擎,如何**证明行为等价**且**防止漂移**——三层递进防线(IT 翻译对拍 / 守恒 proptest / 黄金向量对拍 Java-oracle)+ 差分模糊 + 归一化规格,以及框架发现的真实问题,详见 **[`CONSISTENCY.md`](CONSISTENCY.md)**。
 
 2026-09-18 对整个 crate 做了 6 组并行逐字段 review:**资金结算 6 子系统全部 CLEAN**(零守恒漏洞),仅修了 5 处非资金的事件/报告层平价缺口;`FundEventType` 27/27 全移植,`MatcherEventType` 无遗漏(缺的 6 类由两步处理器按命令类型路由,等价)。详见 CONSISTENCY.md §7.4。
+
+2026-09-19 把撮合执行报告(match event)接进防线③:`SimpleEventsProcessor` 挂 `results_consumer`,同步向量 opt-in `#!match=on` 逐字段对拍 `Spot/FuturesExecutionReport`(不多发/漏发/错发);新增一批 IT 翻译。对拍抓到并修复一个真实资金 bug:**cross 强平破产价**——`LiquidationEngine` 查 cross margin 分配表用错 key(one-way 空头按方向符号重算,与 map key 不匹配 → margin_base=0 → 破产价偏低 → FORCE 单吃不到流动性、漏收 taker fee)。详见 CONSISTENCY.md §7.6。
 
 ## 构建 / 测试 / 基准
 

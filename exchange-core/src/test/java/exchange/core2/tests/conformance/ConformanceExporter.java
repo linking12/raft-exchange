@@ -115,8 +115,6 @@ public class ConformanceExporter {
         boolean matchOn = lines.stream().anyMatch(l -> l.replaceFirst("^#+", "").trim().equals("!match=on"));
         StringBuilder out = new StringBuilder();
         List<Long> uids = new ArrayList<>();
-        // 撮合明细事件(执行报告)多重集:仅同步(现货/期货撮合、无异步清算扫描)向量 opt-in `#!match=on`,
-        // 按发出顺序累加(单线程确定),用于对拍 SpotExecutionReport/FuturesExecutionReport 不多发/漏发/错发。
         final List<String> matchAccum = new ArrayList<>();
         // 线程安全:同步/join 路径由主线程 append,但异步清算(FORCE→IF→ADL)的 fund event 由 disruptor
         // 结果线程(E 阶段)append、由主线程 SCAN 循环读——裸 ArrayList 跨线程会漏读/串读(曾致 LIQUIDATION_FEE
@@ -125,8 +123,6 @@ public class ConformanceExporter {
 
         IEventsHandler4Test handler = new IEventsHandler4Test() {
             @Override public void process(FundEventReport r) { fundEventReport(r); }
-            // ER/ERF 剔除 seq 派生的 tradeId/execId:Java(R2 -seq + 主 +seq 双发) 与 Rust(results_seq 单发)
-            // 的 seq 口径刻意不同(§6 exec-ids 不跨引擎比);taker==maker 共享 id 的不变式由防线① + 单元测试覆盖。
             @Override public void process(SpotExecutionReport r) {
                 if (!matchOn) return;
                 matchAccum.add("ER " + r.executionType.name() + ' ' + r.orderStatus.name()

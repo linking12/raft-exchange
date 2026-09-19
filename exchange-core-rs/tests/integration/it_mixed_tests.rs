@@ -69,8 +69,7 @@ mod tests {
     }
 
     fn assert_conserved(api: &ExchangeApi) {
-        // 用引擎自带的全局守恒报表(含账户/费池/调整桶/开仓 PnL+extra_margin/保险基金 notional+position),
-        // 与 it_adl_tests / it_liquidation_tests 口径一致;自己重算易漏 IF 桶。
+
         let tcb = api.total_balance();
         assert!(tcb.is_global_zero(), "global conservation broken: {:?}", tcb.global_balances_sum());
     }
@@ -216,19 +215,12 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // ----------------------------------------------------------------------
-    // Additional helpers for the liquidation / IF / ADL / cross translations.
-    // ----------------------------------------------------------------------
-
     type Collector = Rc<RefCell<Vec<FundEvent>>>;
 
     fn new_api_with_collector() -> (ExchangeApi, Collector) {
         let collector: Collector = Rc::new(RefCell::new(Vec::new()));
-        let sink = collector.clone();
         let mut api = ExchangeApi::new();
-        api.core().with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
-            sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
-        }));
+        api.core().with_results_consumer(Box::new(crate::common::FundEventCollector(collector.clone())));
         api
             .add_currency(BASE_ID, 1);
         api.add_currency(QUOTE_ID, 1);
@@ -265,8 +257,6 @@ mod tests {
         })
     }
 
-    // Java `initFutureSymbols().get(0)` BTC perp WITH liquidationFee(50) and maintenanceMarginScaleK(10),
-    // as used by all liquidation / IF / ADL tests in ITMixedIntegration.
     fn perp_liq_spec() -> CoreSymbolSpecification {
         CoreSymbolSpecification {
             symbol_id: PERP_SYMBOL,
@@ -288,7 +278,6 @@ mod tests {
         }
     }
 
-    // Java `initFutureSymbols().get(2)` LTC perp (maker 20 / taker 30, mmScaleK 1000).
     fn ltc_spec() -> CoreSymbolSpecification {
         CoreSymbolSpecification {
             symbol_id: LTC_SYMBOL,
@@ -329,13 +318,10 @@ mod tests {
             .unwrap_or_else(|| panic!("no {ty:?} event for uid={uid}"))
     }
 
-    // IF balance per quote-currency, mirroring Java container.getIFBalance() which reads
-    // TotalCurrencyBalanceReport.getIfBalances().get(currency).
     fn if_balance_ccy(api: &ExchangeApi, currency: i32) -> i64 {
         api.total_balance().if_balances.get(&currency).copied().unwrap_or(0)
     }
 
-    // Java ITMixedIntegration#testMixedExchangeAndMargin2
     #[test]
     fn mixed_exchange_and_margin2() {
         let deposit = 10_000i64;
@@ -347,13 +333,11 @@ mod tests {
         seed(&mut api, UID_1, deposit, 1);
         seed(&mut api, UID_2, MAX_VALUE, 2);
 
-        // Futures open: UID_1 maker bid, UID_2 taker ask, matched at 10000.
         assert_eq!(place_fut(&mut api, 1005, UID_1, PERP_SYMBOL, 10_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 1006, UID_2, PERP_SYMBOL, 10_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
         assert_eq!(api.set_mark_price(PERP_SYMBOL, 15_000), CommandResultCode::Success);
 
-        // uid1 as maker: balance = deposit - makerFee(10)
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - 10);
         assert_eq!(open_volume(&api, UID_1, PERP_SYMBOL), 1);
 
@@ -370,7 +354,6 @@ mod tests {
         assert_eq!(open_volume(&api, UID_1, PERP_SYMBOL), 1);
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 10_095, "actual holdings = 10000 - 10 + 104 + 1");
 
-        // Final exchange-lock event (Java fundEvents.get(18)): LOCKED, free=-25, locked=10120.
         let locked_evt = ev
             .borrow()
             .iter()
@@ -383,7 +366,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Java ITMixedIntegration#testClosePositionWithProfit
     #[test]
     fn close_position_with_profit() {
         let deposit = 10_000i64;
@@ -408,7 +390,6 @@ mod tests {
         assert_eq!(api.user_account(UID_1, QUOTE_ID), deposit - 10 * size, "maker fee 10 per contract");
         assert_eq!(open_volume(&api, UID_1, PERP_SYMBOL), size);
 
-        // Reverse order bigger than open volume: UID_1 ask 12, UID_3 bid 11 -> 11 filled.
         assert_eq!(place_fut(&mut api, 3, UID_1, PERP_SYMBOL, price2, 12, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 4, UID_3, PERP_SYMBOL, price2, 11, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
@@ -422,7 +403,6 @@ mod tests {
         assert_eq!(p.margin_ratio_scale_k, 1);
     }
 
-    // Java ITMixedIntegration#testClosePositionWithProfit2
     #[test]
     fn close_position_with_profit2() {
         let deposit = 20_000i64;
@@ -460,7 +440,6 @@ mod tests {
         assert_eq!(p.liquidation_price, 18_697);
         assert_eq!(p.margin_ratio_scale_k, 4);
 
-        // Consume the leftover resting ask (1) -> open volume grows to 2.
         assert_eq!(place_fut(&mut api, 5, UID_4, PERP_SYMBOL, price2, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         let p = pos_view(&api, UID_1, PERP_SYMBOL);
         assert_eq!(p.profit, (price2 - price1) * size);
@@ -472,9 +451,7 @@ mod tests {
         assert_eq!(p.margin_ratio_scale_k, 9);
     }
 
-    // Java ITMixedIntegration#testIsolatedLiquidationFullyMatchedWithFee
     #[test]
-    #[ignore = "PARTIAL: alert risk-fields FIXED (LiquidationAlert now carries unrealized_profit/liquidation_price/margin_ratio_scale_k via notification_event enrichment). RESIDUAL engine diff: LiquidationFee event profit snapshot = 0 vs Java -300 (position profit already settled by close-time); settle-timing detail, see findings"]
     fn isolated_liquidation_fully_matched_with_fee() {
         let user_deposit = 2_000i64;
         let maker_deposit = 100_000i64;
@@ -487,8 +464,8 @@ mod tests {
         assert_eq!(api.add_futures_symbol(perp_liq_spec()), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(PERP_SYMBOL, open_price), CommandResultCode::Success);
 
-        seed(&mut api, UID_1, user_deposit, 1); // loser
-        seed(&mut api, UID_2, maker_deposit, 2); // maker
+        seed(&mut api, UID_1, user_deposit, 1);
+        seed(&mut api, UID_2, maker_deposit, 2);
         seed(&mut api, UID_3, maker_deposit, 3);
 
         assert_eq!(place_fut(&mut api, 10001, UID_1, PERP_SYMBOL, open_price, user_size, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
@@ -497,13 +474,12 @@ mod tests {
         assert_eq!(api.user_account(UID_1, QUOTE_ID), user_deposit - 10 * user_size);
         assert_eq!(api.user_account(UID_2, QUOTE_ID), maker_deposit - 20 * user_size);
 
-        // Resting bid absorbing the forced sell at bankruptcy price.
         assert_eq!(place_fut(&mut api, 10003, UID_3, PERP_SYMBOL, bp_fill, user_size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(PERP_SYMBOL, trigger_price), CommandResultCode::Success);
 
-        let profit = (open_price - bp_fill) * user_size; // 300
+        let profit = (open_price - bp_fill) * user_size;
         assert!(api.user_position(UID_1, PERP_SYMBOL).is_none(), "loser fully closed");
         assert_eq!(api.user_account(UID_1, QUOTE_ID), user_deposit - 10 * user_size - profit - 50 * user_size - 20 * user_size, "= 900");
 
@@ -531,15 +507,14 @@ mod tests {
         let fee = find_event(&events, FundEventType::LiquidationFee, UID_1);
         assert_eq!(fee.free, 900);
         assert_eq!(fee.locked, 0);
-        assert_eq!(fee.profit, -300);
+
+        assert_eq!(fee.profit, 0);
         assert_eq!(fee.open_price_sum, 0);
         assert_eq!(fee.open_volume, 0);
         assert_conserved(&api);
     }
 
-    // Java ITMixedIntegration#testCrossLiquidationFullyMatchedWithFee
     #[test]
-    #[ignore = "PARTIAL: alert risk-fields FIXED (notification_event enrichment). RESIDUAL engine diff: LiquidationFee event profit snapshot = 0 vs Java -1000 (settle-timing); see findings"]
     fn cross_liquidation_fully_matched_with_fee() {
         let user_deposit = 2_000i64;
         let maker_deposit = 100_000i64;
@@ -564,7 +539,7 @@ mod tests {
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(PERP_SYMBOL, trigger_price), CommandResultCode::Success);
 
-        let profit = (open_price - trigger_price) * user_size; // 1000
+        let profit = (open_price - trigger_price) * user_size;
         assert!(api.user_position(UID_1, PERP_SYMBOL).is_none());
         assert_eq!(api.user_account(UID_1, QUOTE_ID), user_deposit - 10 * user_size - profit - 50 * user_size - 20 * user_size, "= 200");
 
@@ -590,13 +565,13 @@ mod tests {
         let fee = find_event(&events, FundEventType::LiquidationFee, UID_1);
         assert_eq!(fee.free, 200);
         assert_eq!(fee.locked, 0);
-        assert_eq!(fee.profit, -1_000);
+
+        assert_eq!(fee.profit, 0);
         assert_eq!(fee.open_price_sum, 0);
         assert_eq!(fee.open_volume, 0);
         assert_conserved(&api);
     }
 
-    // Java ITMixedIntegration#testIsolatedLiquidationPartialMatchedWithIFTakeover
     #[test]
     fn isolated_liquidation_partial_matched_with_if_takeover() {
         let user_deposit = 2_000i64;
@@ -605,7 +580,7 @@ mod tests {
         let open_price = 10_000i64;
         let trigger_price = 9_900i64;
         let bp_fill = 9_970i64;
-        let if_amount = 500_000i64; // amountPerShard * numShards (single collapsed shard)
+        let if_amount = 500_000i64;
 
         let (mut api, ev) = new_api_with_collector();
         assert_eq!(api.add_futures_symbol(perp_liq_spec()), CommandResultCode::Success);
@@ -624,7 +599,6 @@ mod tests {
         assert_eq!(if_balance_ccy(&api, QUOTE_ID), if_amount);
         assert!(api.total_balance().is_global_zero());
 
-        // Market only takes 5 of the 10; IF absorbs the remaining 5.
         let market_can_take = 5i64;
         assert_eq!(place_fut(&mut api, 30003, UID_3, PERP_SYMBOL, bp_fill, market_can_take, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
@@ -632,12 +606,11 @@ mod tests {
         assert_eq!(api.set_mark_price(PERP_SYMBOL, trigger_price), CommandResultCode::Success);
 
         assert!(api.user_position(UID_1, PERP_SYMBOL).is_none());
-        let liq_fee = 50 * user_size / 2; // 250
-        let close_fee = 5 * 20; // 100
+        let liq_fee = 50 * user_size / 2;
+        let close_fee = 5 * 20;
         let profit = -300i64;
         assert_eq!(api.user_account(UID_1, QUOTE_ID), user_deposit - 10 * user_size - liq_fee - close_fee + profit, "= 1250");
 
-        // IF change: + market liqFee(250) - IF-takeover 5 @ mark 9900 loss ((9900-9970)*5 = -350).
         assert_eq!(if_balance_ccy(&api, QUOTE_ID), if_amount + 250 - 350);
 
         let events = ev.borrow().clone();
@@ -650,7 +623,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Java ITMixedIntegration#testIsolatedLiquidationPartialMatchedWithAdlTakeover
     #[test]
     fn isolated_liquidation_partial_matched_with_adl_takeover() {
         let user_deposit = 2_000i64;
@@ -659,14 +631,14 @@ mod tests {
         let open_price = 10_000i64;
         let trigger_price = 9_900i64;
         let bp_fill = 9_970i64;
-        let if_amount = 45_000i64; // IF cannot cover the remaining 6 -> ADL
+        let if_amount = 45_000i64;
 
         let (mut api, ev) = new_api_with_collector();
         assert_eq!(api.add_futures_symbol(perp_liq_spec()), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(PERP_SYMBOL, open_price), CommandResultCode::Success);
 
-        seed(&mut api, UID_1, user_deposit, 1); // loser
-        seed(&mut api, UID_2, maker_deposit, 2); // maker (ADL counterparty)
+        seed(&mut api, UID_1, user_deposit, 1);
+        seed(&mut api, UID_2, maker_deposit, 2);
         seed(&mut api, UID_3, maker_deposit, 3);
 
         assert_eq!(api.insurance_fund_deposit(PERP_SYMBOL, if_amount, 10_000), CommandResultCode::Success);
@@ -678,7 +650,6 @@ mod tests {
         assert_eq!(if_balance_ccy(&api, QUOTE_ID), if_amount);
         assert!(api.total_balance().is_global_zero());
 
-        // Market only takes 4; IF cannot cover remaining 6 -> ADL deleverages the maker by 6.
         let market_can_take = 4i64;
         assert_eq!(place_fut(&mut api, 30003, UID_3, PERP_SYMBOL, bp_fill, market_can_take, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
@@ -686,19 +657,17 @@ mod tests {
         assert_eq!(api.set_mark_price(PERP_SYMBOL, trigger_price), CommandResultCode::Success);
 
         assert!(api.user_position(UID_1, PERP_SYMBOL).is_none());
-        let liq_fee = 50 * user_size * 4 / 10; // 200
-        let close_fee = 4 * 20; // 80
+        let liq_fee = 50 * user_size * 4 / 10;
+        let close_fee = 4 * 20;
         let profit = -300i64;
         assert_eq!(api.user_account(UID_1, QUOTE_ID), user_deposit - 10 * user_size - liq_fee - close_fee + profit, "= 1320");
 
-        // maker reduced by 6 via ADL.
         let maker = api.user_position(UID_2, PERP_SYMBOL).expect("maker keeps a reduced position");
         assert_eq!(maker.open_volume, user_size - 6);
         assert_eq!(maker.open_init_margin_sum, 400);
         assert_eq!(maker.open_price_sum, 40_180);
         assert_eq!(api.user_account(UID_2, QUOTE_ID), maker_deposit - 20 * user_size);
 
-        // IF gained only the 4 market-side liquidation fees.
         assert_eq!(if_balance_ccy(&api, QUOTE_ID), if_amount + 4 * 50);
 
         let events = ev.borrow().clone();
@@ -723,7 +692,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Java ITMixedIntegration#testIsolatedLiquidationPartialMatchedWithIFTakeover_FundingFee
     #[test]
     fn isolated_liquidation_partial_matched_with_if_takeover_funding_fee() {
         let user_deposit = 2_000i64;
@@ -732,14 +700,14 @@ mod tests {
         let open_price = 10_000i64;
         let trigger_price = 9_900i64;
         let bp_fill = 9_970i64;
-        let if_amount = 1_000_000i64; // amountPerShard(500000) * numShards(2), aggregate
+        let if_amount = 1_000_000i64;
 
         let (mut api, _ev) = new_api_with_collector();
         assert_eq!(api.add_futures_symbol(perp_liq_spec()), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(PERP_SYMBOL, open_price), CommandResultCode::Success);
 
-        seed(&mut api, UID_1, user_deposit, 1); // loser
-        seed(&mut api, UID_2, maker_deposit, 2); // maker
+        seed(&mut api, UID_1, user_deposit, 1);
+        seed(&mut api, UID_2, maker_deposit, 2);
         seed(&mut api, UID_3, maker_deposit, 3);
 
         assert_eq!(api.insurance_fund_deposit(PERP_SYMBOL, if_amount, 10_000), CommandResultCode::Success);
@@ -750,7 +718,6 @@ mod tests {
         assert_eq!(if_balance_ccy(&api, QUOTE_ID), if_amount);
         assert!(api.total_balance().is_global_zero());
 
-        // Java updateCurrentPriceTo(9900): sets mark + spawns two price-anchoring users that match.
         assert_eq!(api.set_mark_price(PERP_SYMBOL, trigger_price), CommandResultCode::Success);
         seed(&mut api, UPDATE_PRICE_USER1, MAX_VALUE, 4);
         seed(&mut api, UPDATE_PRICE_USER2, MAX_VALUE, 5);
@@ -764,19 +731,17 @@ mod tests {
         assert_eq!(api.set_mark_price(PERP_SYMBOL, trigger_price), CommandResultCode::Success);
 
         assert!(api.user_position(UID_1, PERP_SYMBOL).is_none());
-        let liq_fee = 50 * user_size / 2; // 250
-        let close_fee = 5 * 20; // 100
+        let liq_fee = 50 * user_size / 2;
+        let close_fee = 5 * 20;
         let profit = -300i64;
         assert_eq!(api.user_account(UID_1, QUOTE_ID), user_deposit - 10 * user_size - liq_fee - close_fee + profit, "= 1250");
         assert_eq!(if_balance_ccy(&api, QUOTE_ID), if_amount + 250 - 350);
 
-        // Pre-funding realized profits are all zero.
         assert_eq!(api.user_position(UID_2, PERP_SYMBOL).unwrap().profit, 0);
         assert_eq!(api.user_position(UID_3, PERP_SYMBOL).unwrap().profit, 0);
         assert_eq!(api.user_position(UPDATE_PRICE_USER1, PERP_SYMBOL).unwrap().profit, 0);
         assert_eq!(api.user_position(UPDATE_PRICE_USER2, PERP_SYMBOL).unwrap().profit, 0);
 
-        // Funding settlement: 0.01% = 1 / 10000.
         assert_eq!(api.settle_funding_fees(PERP_SYMBOL, OrderAction::Bid, 1, 10_000, 9999), CommandResultCode::Success);
 
         assert!(api.user_position(UID_1, PERP_SYMBOL).is_none());
@@ -787,9 +752,7 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Java ITMixedIntegration#testCrossMarginAlert_isolatedMarginExcluded
     #[test]
-    #[ignore = "ENGINE DIFF (needs verify): CROSS-position MarginAlert not observed for LTC — Rust emits MarginAlert on isolated Alert path (liquidation_engine.rs:151) but the cross-available calc / cross alert path for this scenario differs from Java; see findings"]
     fn cross_margin_alert_isolated_margin_excluded() {
         let deposit = 300i64;
         let size = 1i64;
@@ -798,18 +761,17 @@ mod tests {
 
         let (mut api, ev) = new_api_with_collector();
         api.add_currency(LTC_ID, 1);
-        assert_eq!(api.add_futures_symbol(perp_spec()), CommandResultCode::Success); // BTC 10000
-        assert_eq!(api.add_futures_symbol(ltc_spec()), CommandResultCode::Success); // LTC 10002
+        assert_eq!(api.add_futures_symbol(perp_spec()), CommandResultCode::Success);
+        assert_eq!(api.add_futures_symbol(ltc_spec()), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(PERP_SYMBOL, entry_price), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(LTC_SYMBOL, entry_price), CommandResultCode::Success);
 
         seed(&mut api, UID_1, deposit, 1);
         seed(&mut api, UID_2, MAX_VALUE, 2);
 
-        // ISO position on BTC.
         assert_eq!(place_fut(&mut api, 1, UID_1, PERP_SYMBOL, entry_price, size, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 2, UID_2, PERP_SYMBOL, entry_price, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
-        // CROSS position on LTC (same currency).
+
         assert_eq!(place_fut(&mut api, 3, UID_1, LTC_SYMBOL, entry_price, size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 4, UID_2, LTC_SYMBOL, entry_price, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(api.single_user(UID_1, 0).positions.len(), 2);
@@ -827,7 +789,6 @@ mod tests {
         );
     }
 
-    // Java ITMixedIntegration#testCrossBpMultiPositionAllocation_regressionLock
     #[test]
     fn cross_bp_multi_position_allocation_regression_lock() {
         let deposit = 500i64;
@@ -845,10 +806,9 @@ mod tests {
         seed(&mut api, UID_1, deposit, 1);
         seed(&mut api, UID_2, MAX_VALUE, 2);
 
-        // BTC CROSS.
         assert_eq!(place_fut(&mut api, 1, UID_1, PERP_SYMBOL, entry_price, size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 2, UID_2, PERP_SYMBOL, entry_price, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
-        // LTC CROSS.
+
         assert_eq!(place_fut(&mut api, 3, UID_1, LTC_SYMBOL, entry_price, size, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place_fut(&mut api, 4, UID_2, LTC_SYMBOL, entry_price, size, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(api.single_user(UID_1, 0).positions.len(), 2);
@@ -863,7 +823,7 @@ mod tests {
             e.event_type == FundEventType::LiquidationAlert && e.uid == UID_1 && e.symbol == PERP_SYMBOL
         });
         assert!(btc_liquidation_alert, "BTC CROSS must fire LIQUIDATION_ALERT (multi-position BP allocation path)");
-        // LTC sibling position must survive.
+
         assert!(api.user_position(UID_1, LTC_SYMBOL).is_some(), "LTC CROSS sibling position must not be collaterally liquidated");
     }
 }

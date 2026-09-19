@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -9,7 +11,7 @@ use crate::core::common::isolated_loan_record::{IsolatedLoanRecord, LoanRateMode
 use crate::core::common::order_action::OrderAction;
 use crate::core::common::order_type::OrderType;
 use crate::core::common::user_profile::UserProfile;
-use crate::core::processors::liquidation::command_submitter::CommandSubmitter;
+use crate::core::processors::liquidation::command_submitter::{CommandSubmitter, CommandSubmitterHandle};
 use crate::core::processors::liquidation::scheduler::covered_by_scan_slice;
 use crate::core::processors::loan::loan_service::{
     LoanService, BPS_SCALE, ORDERID_SUBTYPE_CROSS, ORDERID_SUBTYPE_ISOLATED,
@@ -24,7 +26,7 @@ const MS_PER_DAY: i64 = 86_400 * 1_000;
 pub struct LoanLiquidationEngine {
     pub isolated_loan_symbol_to_users: BTreeMap<i32, BTreeSet<i64>>,
     pub cross_loan_currency_to_users: BTreeMap<i32, BTreeSet<i64>>,
-    command_submitter: CommandSubmitter,
+    command_submitter: CommandSubmitterHandle,
 }
 
 impl LoanLiquidationEngine {
@@ -32,8 +34,8 @@ impl LoanLiquidationEngine {
         LoanLiquidationEngine::default()
     }
 
-    pub fn set_command_submitter(&mut self, cb: Box<dyn FnMut(OrderCommand)>) {
-        self.command_submitter.set(cb);
+    pub fn set_command_submitter(&mut self, submitter: Rc<RefCell<dyn CommandSubmitter>>) {
+        self.command_submitter.set(submitter);
     }
 
     pub fn rebuild_indices(&mut self, ups: &UserProfileService) {
@@ -424,9 +426,9 @@ mod tests {
     const UID: i64 = 7;
 
     fn attach_collector(e: &mut LoanLiquidationEngine) -> Rc<RefCell<Vec<OrderCommand>>> {
+        use crate::core::processors::liquidation::command_submitter::VecCommandSink;
         let collected = Rc::new(RefCell::new(Vec::new()));
-        let sink = collected.clone();
-        e.set_command_submitter(Box::new(move |cmd| sink.borrow_mut().push(cmd)));
+        e.set_command_submitter(Rc::new(RefCell::new(VecCommandSink(collected.clone()))));
         collected
     }
 

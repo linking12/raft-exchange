@@ -1,3 +1,21 @@
+pub mod common {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use exchange_core_rs::core::common::cmd::order_command::OrderCommand;
+    use exchange_core_rs::core::common::fund_event::FundEvent;
+    use exchange_core_rs::core::exchange_core::ResultsConsumer;
+    use exchange_core_rs::core::processors::symbol_specification_provider::SymbolSpecificationProvider;
+    use exchange_core_rs::core::processors::user_profile_service::UserProfileService;
+
+    pub struct FundEventCollector(pub Rc<RefCell<Vec<FundEvent>>>);
+    impl ResultsConsumer for FundEventCollector {
+        fn consume(&mut self, cmd: &OrderCommand, _seq: i64, _ssp: &SymbolSpecificationProvider, _ups: &UserProfileService) {
+            self.0.borrow_mut().extend(cmd.fund_events.iter().cloned());
+        }
+    }
+}
+
 mod it_custom_leverage_tests;
 mod it_exchange_core_integration_rejection_tests;
 mod it_exchange_core_integration_tests;

@@ -617,10 +617,6 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // Translation of ITExtraMarginIntegration.testCrossMarginWithdraw:
-    // two resting isolated maker orders lock 570 of margin; an extra-margin transfer with no free
-    // balance left must fail (extraMargin stays 0), and a full-deposit withdrawal must stay blocked
-    // until enough is topped up to cover exactly the locked margin.
     #[test]
     fn cross_margin_withdraw_respects_locked_margin() {
         let deposit = 10_000i64;
@@ -637,11 +633,9 @@ mod tests {
         assert_eq!(api.set_mark_price(ETH_SYM, 10_000), CommandResultCode::Success);
         seed_user(&mut api, UID_1, deposit, 1);
 
-        // resting maker orders that reserve isolated margin but do not match
         assert_eq!(place(&mut api, 1005, UID_1, BTC_SYM, price1, 1, OrderAction::Bid, MarginMode::Isolated), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1007, UID_1, ETH_SYM, price2, 1, OrderAction::Ask, MarginMode::Isolated), CommandResultCode::Success);
 
-        // extra-margin transfer fails: no free balance remains
         let _ = api.margin_adjustment(MarginAdjustmentRequest {
             uid: UID_1,
             symbol: BTC_SYM,
@@ -655,7 +649,6 @@ mod tests {
         assert_eq!(api.user_position(UID_1, ETH_SYM).unwrap().extra_margin, 0);
         assert!(api.total_balance().is_global_zero());
 
-        // withdrawing the full deposit is blocked: 570 of margin is locked by the two resting orders
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -deposit, 100), CommandResultCode::RiskNsf);
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, 569, 101), CommandResultCode::Success);
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, -deposit, 102), CommandResultCode::RiskNsf);

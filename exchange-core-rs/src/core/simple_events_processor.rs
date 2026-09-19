@@ -38,6 +38,25 @@ impl FundEventsHandler for LoggingEventsHandler {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopEventsHandler;
+
+impl TradeEventsHandler for NoopEventsHandler {
+    fn order_book(&mut self, _order_book: OrderBook) {}
+    fn spot_execution_report(&mut self, _report: SpotExecutionReport) {}
+    fn futures_execution_report(&mut self, _report: FuturesExecutionReport) {}
+}
+
+impl FundEventsHandler for NoopEventsHandler {
+    fn fund_event_report(&mut self, _report: FundEventReport) {}
+}
+
+impl<T: TradeEventsHandler, F: FundEventsHandler> crate::core::exchange_core::ResultsConsumer for SimpleEventsProcessor<T, F> {
+    fn consume(&mut self, cmd: &OrderCommand, seq: i64, ssp: &SymbolSpecificationProvider, ups: &UserProfileService) {
+        self.process(cmd, seq, ssp, ups);
+    }
+}
+
 impl<T: TradeEventsHandler, F: FundEventsHandler> SimpleEventsProcessor<T, F> {
     pub fn new(trade: T, fund: F) -> Self {
         SimpleEventsProcessor { trade, fund }
@@ -361,8 +380,7 @@ mod tests {
         run(&mut core, &mut maker);
 
         let proc = Rc::new(RefCell::new(SimpleEventsProcessor::new(TradeRec::default(), FundRec::default())));
-        let sink = proc.clone();
-        core.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| sink.borrow_mut().process(cmd, seq, ssp, ups)));
+        core.with_results_consumer(Box::new(proc.clone()));
 
         let mut taker = OrderCommand {
             command: OrderCommandType::PlaceOrder, order_id: 101, uid: BUYER, symbol: SYMBOL,
@@ -403,8 +421,8 @@ mod tests {
             price: 100, size: 10, action: Some(OrderAction::Ask), order_type: Some(OrderType::Gtc), ..Default::default()
         });
 
-        let mut proc = SimpleEventsProcessor::new(LoggingEventsHandler, LoggingEventsHandler);
-        core.with_results_consumer(Box::new(move |cmd, seq, ssp, ups| proc.process(cmd, seq, ssp, ups)));
+        let proc = SimpleEventsProcessor::new(LoggingEventsHandler, LoggingEventsHandler);
+        core.with_results_consumer(Box::new(proc));
 
         let mut taker = OrderCommand {
             command: OrderCommandType::PlaceOrder, order_id: 101, uid: BUYER, symbol: SYMBOL,

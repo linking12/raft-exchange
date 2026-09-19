@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::order_command::OrderCommand;
@@ -12,7 +14,7 @@ use crate::core::common::order_type::OrderType;
 use crate::core::common::position_direction::PositionDirection;
 use crate::core::common::symbol_position_record::SymbolPositionRecord;
 use crate::core::common::user_profile::UserProfile;
-use crate::core::processors::liquidation::command_submitter::CommandSubmitter;
+use crate::core::processors::liquidation::command_submitter::{CommandSubmitter, CommandSubmitterHandle};
 use crate::core::processors::liquidation::liquidation_flow::{LiquidationFlow, LiquidationState};
 use crate::core::processors::liquidation::liquidation_service::LiquidationService;
 use crate::core::processors::loan::loan_liquidation_engine::LoanLiquidationEngine;
@@ -42,7 +44,7 @@ pub struct LiquidationEngine {
     pub symbol_to_users: BTreeMap<i32, BTreeSet<i64>>,
     pub is_running: bool,
     pub loan_liquidation_engine: LoanLiquidationEngine,
-    command_submitter: CommandSubmitter,
+    command_submitter: CommandSubmitterHandle,
 }
 
 impl LiquidationEngine {
@@ -50,12 +52,9 @@ impl LiquidationEngine {
         LiquidationEngine::default()
     }
 
-    pub fn set_command_submitter<F>(&mut self, make: F)
-    where
-        F: Fn() -> Box<dyn FnMut(OrderCommand)>,
-    {
-        self.command_submitter.set(make());
-        self.loan_liquidation_engine.set_command_submitter(make());
+    pub fn set_command_submitter(&mut self, submitter: Rc<RefCell<dyn CommandSubmitter>>) {
+        self.command_submitter.set(submitter.clone());
+        self.loan_liquidation_engine.set_command_submitter(submitter);
     }
 
     pub fn on_position_opened(&mut self, uid: i64, symbol: i32) {
@@ -156,7 +155,7 @@ impl LiquidationEngine {
                     cross_by_currency.entry(spec.quote_currency).or_default().push(key);
                 }
             }
-            Self::check_cross_decisions(profile, &cross_by_currency, ssp, last_price_cache, &mut decisions);
+            Self::check_cross_decisions(uid, profile, &cross_by_currency, ssp, last_price_cache, &mut decisions, fund_events);
             decisions
         };
 
@@ -197,12 +196,15 @@ impl LiquidationEngine {
         IsolatedCheck::Liquidate(LiquidationDecision { position_key, bankruptcy_price, size: size_to_liquidate })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn check_cross_decisions(
+        uid: i64,
         profile: &UserProfile,
         cross_by_currency: &BTreeMap<i32, Vec<i32>>,
         ssp: &SymbolSpecificationProvider,
         last_price_cache: &BTreeMap<i32, LastPriceCacheRecord>,
         decisions: &mut Vec<LiquidationDecision>,
+        fund_events: &mut Vec<FundEvent>,
     ) {
         if cross_by_currency.is_empty() {
             return;
@@ -256,6 +258,7 @@ impl LiquidationEngine {
                     risk_pairs.push((risk, key));
                 }
             }
+            risk_pairs.sort_by_key(|p| p.0);
             let equity = total_profit
                 + profile.calculate_cross_available(currency, currency_spec, |s| ssp.get_symbol(s));
             let warning_threshold = mul_exact(total_maintenance, 6) / 5;
@@ -263,10 +266,18 @@ impl LiquidationEngine {
                 continue;
             }
             if equity >= total_maintenance {
+                if let Some(&(_, key)) = risk_pairs.first() {
+                    if let Some(position) = profile.positions.get(&key) {
+                        if let Some(spec) = ssp.get_symbol(position.symbol) {
+                            fund_events.push(Self::notification_event(
+                                FundEventType::MarginAlert, uid, position, spec, profile, ssp, last_price_cache,
+                            ));
+                        }
+                    }
+                }
                 continue;
             }
 
-            risk_pairs.sort_by_key(|p| p.0);
             Self::force_cross_decisions(
                 profile,
                 &risk_pairs,
@@ -303,7 +314,8 @@ impl LiquidationEngine {
                 Some(r) => r.mark_price,
                 None => continue,
             };
-            let bankruptcy_price = position.calculate_bankruptcy_price(spec, |p| alloc.get(&Self::pos_key(p)).copied().unwrap_or(0));
+
+            let bankruptcy_price = position.calculate_bankruptcy_price(spec, |_| alloc.get(&key).copied().unwrap_or(0));
             let maintenance_margin = position.calculate_maintenance_margin(spec, mark_price);
             let size_to_liquidate =
                 position.open_volume.min(Self::size_to_liquidate_for(position, maintenance_margin, mark_price));
@@ -431,13 +443,6 @@ impl LiquidationEngine {
         }
     }
 
-    fn pos_key(p: &SymbolPositionRecord) -> i32 {
-        match p.direction {
-            PositionDirection::Short => -p.symbol,
-            _ => p.symbol,
-        }
-    }
-
     fn size_to_liquidate_for(position: &SymbolPositionRecord, maintenance_margin: i64, mark_price: i64) -> i64 {
         let equity = position.open_init_margin_sum + position.estimate_unrealized_profit(mark_price);
         calculate_size_to_liquidate(
@@ -530,12 +535,9 @@ mod tests {
     const UID: i64 = 1;
 
     fn attach_collector(engine: &mut LiquidationEngine) -> Rc<RefCell<Vec<OrderCommand>>> {
+        use crate::core::processors::liquidation::command_submitter::VecCommandSink;
         let collected = Rc::new(RefCell::new(Vec::new()));
-        let sink = collected.clone();
-        engine.set_command_submitter(move || {
-            let s = sink.clone();
-            Box::new(move |cmd| s.borrow_mut().push(cmd))
-        });
+        engine.set_command_submitter(Rc::new(RefCell::new(VecCommandSink(collected.clone()))));
         collected
     }
 

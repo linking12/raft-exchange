@@ -1,8 +1,3 @@
-// Java ITR2SyncOptimization 的 Rust 对拍翻译(防线①):资金费率结算的精确金额 + 零和守恒。
-//
-// Java 原测跑 2 分片(uid%2)验证跨分片资金费一致;Rust 单分片塌缩,funding 逐张费率与零和不变,
-// 仍逐值对齐 Java 黄金值(多头每张付 1、空头每张收 1)。资金费 delta 只取决于仓位方向/张数,
-// 与自由余额/杠杆无关,故此处放宽播种/杠杆以避开保证金 NSF,不影响被断言的 profit delta。
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -68,7 +63,6 @@ mod tests {
         })
     }
 
-    // uid `holder` 以 `size` 张开仓(bid=LONG / ask=SHORT),`taker` 反向吃单成交对手方。
     fn open(api: &mut ExchangeApi, holder_oid: i64, holder: i64, taker_oid: i64, taker: i64, size: i64, holder_bid: bool) {
         let (h_act, t_act) = if holder_bid { (OrderAction::Bid, OrderAction::Ask) } else { (OrderAction::Ask, OrderAction::Bid) };
         assert_eq!(place(api, holder_oid, holder, size, h_act), CommandResultCode::Success);
@@ -80,8 +74,6 @@ mod tests {
         api.user_position(uid, SYM).map(|p| p.profit).unwrap_or(0)
     }
 
-    // 对齐 Java testSettleFundingFees_TwoShards_Symmetric:
-    // 多头 L1=10 张 / L2=5 张 付费,空头 S1=5 张 / S2=10 张 收费,费率 0.01%(1/10000)@ mark 10000。
     #[test]
     fn settle_funding_fees_symmetric() {
         let (l1, l2, s1, s2) = (101i64, 102, 201, 202);
@@ -95,14 +87,13 @@ mod tests {
             seed(&mut api, *uid, 100_000_000, 20 + i as i64);
         }
 
-        open(&mut api, 1001, l1, 1002, t1, 10, true); // L1 LONG 10
-        open(&mut api, 2001, s1, 2002, t2, 5, false); // S1 SHORT 5
-        open(&mut api, 3001, l2, 3002, t3, 5, true); // L2 LONG 5
-        open(&mut api, 4001, s2, 4002, t4, 10, false); // S2 SHORT 10
+        open(&mut api, 1001, l1, 1002, t1, 10, true);
+        open(&mut api, 2001, s1, 2002, t2, 5, false);
+        open(&mut api, 3001, l2, 3002, t3, 5, true);
+        open(&mut api, 4001, s2, 4002, t4, 10, false);
 
         let (l1b, l2b, s1b, s2b) = (profit(&api, l1), profit(&api, l2), profit(&api, s1), profit(&api, s2));
 
-        // 多头付空头(action=BID),费率 1/10000
         assert_eq!(api.settle_funding_fees(SYM, OrderAction::Bid, 1, 10_000, 9999), CommandResultCode::Success);
 
         let (dl1, dl2, ds1, ds2) = (
@@ -121,7 +112,6 @@ mod tests {
         assert_eq!(ds2 / 10, 1, "per-contract funding = 1 (short S2)");
     }
 
-    // 单持仓退化:一个多头 + 一个空头,等张数,funding 一进一出零和(对齐 Test 1.2 精神)。
     #[test]
     fn settle_funding_fees_single_pair() {
         let (long_u, short_u, taker) = (111i64, 211, 311);
@@ -130,7 +120,6 @@ mod tests {
         seed(&mut api, short_u, 1_000_000, 2);
         seed(&mut api, taker, 100_000_000, 3);
 
-        // long 8 张:long_u BID 8,short_u ASK 8 直接对成(无需 taker)
         assert_eq!(place(&mut api, 1, short_u, 8, OrderAction::Ask), CommandResultCode::Success);
         assert_eq!(place(&mut api, 2, long_u, 8, OrderAction::Bid), CommandResultCode::Success);
         assert_eq!(api.user_position(long_u, SYM).unwrap().open_volume, 8);

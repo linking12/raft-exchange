@@ -240,9 +240,6 @@ mod tests {
         assert_outcome(&api, taker_size, PRICE, UID_2, 0, UID_1, xbt_dep);
     }
 
-    // Translation of ITFeesExchange.shouldProcessFees_AskGtcMakerPartial_BidIocTaker:
-    // ASK GTC maker (2000) partially filled by a BID IOC taker (1997) -> 1997 filled, maker/taker
-    // fees charged on the filled amount.
     #[test]
     fn ask_gtc_maker_partial_bid_ioc_taker() {
         let mut api = new_api();

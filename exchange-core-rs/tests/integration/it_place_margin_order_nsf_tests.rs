@@ -295,17 +295,13 @@ mod tests {
 
     #[test]
     fn hedge_opposite_leg_subtracts_sibling_im() {
-        // HEDGE + CROSS: opening the opposite leg must subtract the existing leg's IM from
-        // crossFreeMargin. LONG 5@1000 lev5 -> account 115, LONG openInitMarginSum 10.
-        // opposite SHORT: required = 10(IM) + 100(fee) - (0 - 10) = 120 > spendable 115 -> NSF.
-        // after +10 -> spendable 125 >= 120 -> SUCCESS.
+
         let mut api = setup_single(MARK_PRICE);
         add_user_money(&mut api, TRADER, 215, 1);
         add_user_money(&mut api, LP, 10_000_000, 2);
 
         assert_eq!(api.adjust_position_mode(TRADER, true), CommandResultCode::Success);
 
-        // open LONG 5 @ mark (LP ASK maker, trader BID taker), CROSS lev5
         assert_eq!(
             place(&mut api, 60001, LP, SYMBOL, MARK_PRICE, OPEN_SIZE, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, LEVERAGE),
             CommandResultCode::Success
@@ -322,13 +318,11 @@ mod tests {
         );
         assert_eq!(api.user_account(TRADER, USD), 115, "taker fee of 100 should already be deducted");
 
-        // open opposite SHORT leg: required 120 > spendable 115 -> NSF
         assert_eq!(
             place(&mut api, 60003, TRADER, SYMBOL, MARK_PRICE, OPEN_SIZE, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, LEVERAGE),
             CommandResultCode::RiskNsf
         );
 
-        // top up 10 -> spendable 125 >= 120 -> SUCCESS
         assert_eq!(api.balance_adjustment(TRADER, USD, 10, 3), CommandResultCode::Success);
         assert_eq!(
             place(&mut api, 60004, TRADER, SYMBOL, MARK_PRICE, OPEN_SIZE, OrderAction::Ask, OrderType::Gtc, MarginMode::Cross, LEVERAGE),
