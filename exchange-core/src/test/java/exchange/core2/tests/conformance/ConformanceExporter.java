@@ -69,7 +69,8 @@ public class ConformanceExporter {
             "FUNDINGFEE_SETTLEMENT", "PNL_SETTLEMENT", "MARGIN_ADJUST", "MARGIN_REFUND",
             "IF_POSITION_CLOSE", "ADL_ORIGIN_CLOSE", "ADL_POSITION_CLOSE",
             "LOAN_BORROW", "LOAN_REPAY", "LOAN_LIQUIDATED", "INTERNAL_TRANSFER",
-            "MARGIN_ALERT", "LIQUIDATION_ALERT", "LOAN_MARGIN_CALL");
+            "MARGIN_ALERT", "LIQUIDATION_ALERT", "LOAN_MARGIN_CALL",
+            "OPEN_POSITION", "CLOSE_POSITION");
 
     private static final TreeSortedMap<Long, Long> MM = TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L);
     private static final TreeSortedMap<Long, Long> LEV = TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L);

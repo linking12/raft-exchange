@@ -25,3 +25,9 @@ FE FUNDINGFEE_SETTLEMENT uid=1 cur=2 free=999700 locked=300
 FE FUNDINGFEE_SETTLEMENT uid=2 cur=2 free=999900 locked=100
 FE FUNDINGFEE_SETTLEMENT uid=3 cur=2 free=999900 locked=100
 FE FUNDINGFEE_SETTLEMENT uid=4 cur=2 free=999900 locked=100
+FE OPEN_POSITION uid=1 cur=2 free=999700 locked=300
+FE OPEN_POSITION uid=1 cur=2 free=999700 locked=300
+FE OPEN_POSITION uid=1 cur=2 free=999700 locked=300
+FE OPEN_POSITION uid=2 cur=2 free=999900 locked=100
+FE OPEN_POSITION uid=3 cur=2 free=999900 locked=100
+FE OPEN_POSITION uid=4 cur=2 free=999900 locked=100

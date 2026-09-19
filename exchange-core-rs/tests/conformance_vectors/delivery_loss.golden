@@ -9,5 +9,7 @@ STATE
 A 1 2 998000
 A 2 2 1002000
 EVENTS
+FE OPEN_POSITION uid=1 cur=2 free=999900 locked=100
+FE OPEN_POSITION uid=2 cur=2 free=999900 locked=100
 FE PNL_SETTLEMENT uid=1 cur=2 free=998000 locked=0
 FE PNL_SETTLEMENT uid=2 cur=2 free=1002000 locked=0

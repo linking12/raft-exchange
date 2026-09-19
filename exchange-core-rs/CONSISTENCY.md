@@ -176,7 +176,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **强平触发 / 周期兜底扫** | on-lane(markprice/funding apply 即 targeted 检测)**+** 定时线程周期发 `LIQUIDATION_SCAN` 全量兜底(`LiquidationScheduledService`,默认 2s) | on-lane 同 Java;周期兜底**发令逻辑**在 `scheduler.rs::run_one_iteration`,产出的 `LIQUIDATION_SCAN`/`REPRICE_LOAN_RATES` 经 `LiquidationScheduler.command_submitter` 回调出口(= Java `LiquidationCommandSubmitter`,与 cascade 同一 sink);**墙钟由外层驱动**(库内不含线程/定时器,便于单测),scheduler 不再由 `ExchangeCore` 持有 | 主触发两侧相同=on-lane;周期兜底扫两侧都有,scan 与 FORCE/IF/ADL 走同一回调出口。事件用全流多重集比,不比逐命令归属 |
 | **清算命令提交 / 级联执行模型** | `LiquidationEngine`(继承 `LiquidationScheduledService`)持 `commandSubmitter` 回调,生成的 **scan/FORCE/IF/ADL** 调 `submit(cmd)` → `ExchangeCore.setCommandSubmitter` 注入的 `api.submitCommand`:无 raft 直接进 ring buffer、有 raft **经共识后**回流 apply | **回调模型对齐 Java**:`LiquidationEngine`/`LoanLiquidationEngine`/`LiquidationScheduler` 各持 `command_submitter` 回调(Rust `Box<dyn FnMut(OrderCommand)>`);`ExchangeCore::new` 把它注册成"塞进 `ExchangeCore.pending_commands: Rc<RefCell<Vec>>`"(= Java 单节点 ring buffer)。**单节点**=`process_command` 处理完主命令后 inline 自驱 `pending_commands`(逐条再走 R1→ME→R2 直到清空);**集群**=回调改注册成 raft 提交 → `pending` 恒空、驱动循环 no-op,`take_pending_commands` 交外层过共识、提交后逐条回流各自一次 `process_command`。leader-gated 生成不变 | 提交模型两侧已对齐(回调出口,覆盖 scan/FORCE/IF/ADL)。**单节点**驱动序与 **集群** 共识序不同(前者会把 ADL origin 完全消耗后再跑其 stale ADL);但 R1 夹位 `normalizeCmdPositionSize`↔`normalize_cmd_position_size` **两侧逐字节一致**(`min(cmd.size, openVolume)`,`null`/`None` 分支都 `cmd.size=0`),故任何顺序都不造钱,终态一致(见 §7.5)。**raft submitter 实际实现(jraft/aeron)在外层 server,不在本 crate**;库内提供回调出口 + 单测分流(`cluster_mode_hands_cascade_*` / `cluster_mode_cascade_completes_across_rounds_*`)。逐命令结果经 `ExchangeCore.results_consumer`(= Java `resultsConsumer`,`SimpleEventsProcessor` 可挂其上)触发,不再有引擎侧 `last_cascade_events` 聚合。命令 byte 码 `LIQUIDATION_SCAN` 两侧现均=44(Java 原 64 与 `LOAN_IF_DEPOSIT` 撞码,已改,便于上 raft 按码序列化) |
 | **`MARGIN_ALERT`/`LIQUIDATION_ALERT`/`LOAN_MARGIN_CALL`(逐仓风险告警)** | 引擎内随强平扫描发 | Rust 同样发(`liquidation_engine`/`loan_liquidation_engine`) | **在对拍白名单内**:`LIQUIDATION_ALERT` 已由 8 个向量逐值对拍;`MARGIN_ALERT`/`LOAN_MARGIN_CALL` 亦 allowed,当前无向量触发其告警(警戒线)路径(开放盲区,见 §11)。注:此处是**逐仓位风险告警**,与"池子水位告警走外部拉报表"(`pool-monitoring-external`)是两回事 |
-| **仓位生命周期事件** `OPEN_POSITION`/`CLOSE_POSITION` | 期货开仓只对 maker 发 | maker+taker 都发(钱一致、事件数不同) | 排除(与 `POS` 状态冗余) |
+| **仓位生命周期事件** `OPEN_POSITION`/`CLOSE_POSITION` | 每笔成交 taker/maker 各自按"本仓开/增→OPEN、平→CLOSE"发(guard `sizeToOpen>0`/`closedSize>0`) | 规则逐行相同(`settle_margin_position_event`,同 guard) | **已进 ③ 逐事件对拍**(2026-09-19):两侧发射规则经代码深审确认完全一致,168 条 OPEN + 21 条 CLOSE 逐值对拍。⚠ golden **必须隔离(单向量)生成**——Java exporter 全量生成会因双发(R2+main)`processed` 去重竞态重复捕获(见 §10/[[conformance-exporter-async-flaky]]);Rust 单发确定无此问题 |
 | **记账/锁事件** `Deposit`/`Locked`/… | `balance_adjustment` 等会发 | 部分不发 | 排除(只对拍结算类) |
 | **撮合明细事件(高层报告)** | `SpotExecutionReport`/`FuturesExecutionReport` | 经 `SimpleEventsProcessor` 产出同型报告 | **同步向量已进 ③**(`#!match=on` 的 `MATCH` 段,`ER`/`ERF` 逐字段);异步清算向量仍只靠 ① |
 | **执行报告 exec-id / trade-id** | `seq` 由 disruptor 定(R2 `-seq` + 主 `+seq` 双发) | `results_seq` 单发递增 | `ER`/`ERF` **剔除** `tid`/`eid`(seq 口径刻意不同);taker==maker 共享 id 的不变式由 ① + `simple_events_processor` 单测覆盖 |
@@ -187,12 +187,13 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **`symbol_to_users` 强平索引维护** | 平仓时 eager 摘除(`RiskEngine.removePositionRecord` → `onPositionClosed`) | lazy 清理:下一次针对该 symbol 的 `check_positions` 用 `retain()` 剔除无仓持有人(`on_position_closed` 未接进平仓路径) | 内部性能索引(选扫描候选),非可观测资金/行为态;无仓 uid 两侧都不会被强平,清算结果一致(`it_liquidation` symbol_index 测试验 lazy 模型) |
 | **`state_hash`** | Java 自己的 hash | 逐字段折叠、是超集 | 不互比;跨实现用 ③ 的语义状态摘要 |
 | **现货普通 FOK(`OrderType.FOK`)** | **未实现**(`// TODO FOK support`,整单 reject) | 已实现 fill-or-kill | Rust 更完整;差分模糊不随机普通 FOK(`fok_kill` 手写覆盖)。**`FOK_BUDGET`/`IOC_BUDGET` 两侧都实现、已对拍一致** |
+| **`NO_RISK_PROCESSING` 风控短路模式** | `cfgIgnoreRiskProcessing`(`RiskEngine.java:411` placeOrderRiskCheck / `:836` closePositionRiskCheck)置位时短路返回 `VALID_FOR_MATCHING_ENGINE`,跳过余额锁/保证金检查(测试/高频模式) | **刻意不移植**:无此配置,恒走全量风控 | Rust 更严格、绝不放行无锁订单。确定性 Raft 状态机跳过风控会破坏资金完整性,故不移植;正常部署不用该模式,无资金影响(2026-09-19 三路径深审确认) |
 | **批处理 R1/R2 时序** | 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(须 barrier,否则 spurious NSF) | 单管线 R2 恒先于下条 R1 | exporter 每命令 flush,比 settled 语义 |
 | **借贷池分片本地性** | `loanPoolAvailable` 每 risk 分片各一份;`POOL_DEPOSIT` 只在 `cmd.uid==shardId` 的片记账,贷款只见**本片**流动性(exporter DEFAULT=2 risk 片) | 单片塌缩,全局共池 | 向量令借款人 uid 与注资 shard 同片(偶数 uid→shard 0),两侧口径一致(见 §7.3) |
 
 > **已消除的差异**:funding receiver 余数 dust 归属曾是刻意差异(Java 按 `LongLongHashMap` hash 序、Rust 按 `BTreeMap` 升序)。2026-09-17 已把 Java `FundingFeeCommandProcessor` 余数分配改为 **uid 升序**(`keySet().toSortedArray()`)= Rust,两侧一致且 Java oracle 更确定。现由 `funding_multi_receiver_dust` / `funding_zero_share_receiver` / `funding_multi_payer_multi_receiver` 三个 events-on 向量对拍。
 
-**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的,共 16 类):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`、`MARGIN_ALERT`、`LIQUIDATION_ALERT`、`LOAN_MARGIN_CALL`。两侧白名单必须与 `fe_allowed` 同步维护。**当前 allowed 但无向量覆盖**:`INTERNAL_TRANSFER`(两侧引擎都发双腿事件,见 §11)、`MARGIN_ALERT`、`LOAN_MARGIN_CALL`。
+**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的,共 18 类):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`、`MARGIN_ALERT`、`LIQUIDATION_ALERT`、`LOAN_MARGIN_CALL`、`OPEN_POSITION`、`CLOSE_POSITION`。两侧白名单必须与 `fe_allowed` 同步维护。**当前 allowed 但无向量覆盖**:`MARGIN_ALERT`、`LOAN_MARGIN_CALL`(告警警戒线路径无向量触发)。
 
 ---
 
@@ -259,6 +260,16 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 - **根因(实测定位)**:Java `OrderBookEventsHelper.sendReduceEvent` 取 `order.getFilledNotional()`,而 Java 的 MOVE 撮合路径**只累计 mover order 的 `filled`、不累计 `filledNotional`**(留 0);Rust 两者都累计,自洽。对照向量 `spot_cancel_after_fill`(正常 maker 部分成交后 CANCEL)两侧**一致**(`cumQty=4 cumQ=400`),证明只有 MOVE 路径有此 quirk,普通成交路径 `makerOrder.filledNotional += ...` 正常。
 - **定性**:Java 报告层 quirk,Rust 更正确;`cumulative_qty`/账户/仓位/资金全部正确,仅 `cumulative_quote_qty` 在"MOVE 成交→reduce/cancel 报告"这一狭窄链路上不一致。
 - **修复(已落地)**:Java `OrderBookDirectImpl.moveOrder` + `OrderBookNaiveImpl.moveOrder` 在 `order.filled = filled` 后补 `order.filledNotional = matchResult[1]`(与 `placeOrder` 一致)。验证:①全 85 向量重生成**仅 `spot_cancel_reduce_move` 一个 golden 变**(cumQ 0→450),其余零漂移;②`OrderBook*Test`/`*EventsProcessor*Test` + **全量 Java 套件绿**;③`filledNotional` 读者仅报告/快照/equals(不进风控结算),影响面吻合。`spot_cancel_reduce_move`(MOVE 成交后 CANCEL)现两侧一致,留作回归护栏。
+
+### 7.7 交易资金路径全量深审(2026-09-19):三路径逐行对比,零未记录资金分歧
+
+针对"期货/现货交易资金是否出问题"的专项深挖:三路径**逐行**对比 Java↔Rust(不看测试绿灯,直接读钱的算术与守卫)。
+
+- **现货撮合**(`place_exchange_order`/`handle_matcher_events_exchange_{sell,buy}`/`handle_matcher_reject_reduce_event_exchange` ↔ Java `RiskEngine.placeExchangeOrder`/`handleMatcherEvents*`):下单锁(BID reserve 价 budget/limit 分支、ASK 锁 base)、撤单/减单/IOC-FOK 余量解锁(无泄漏/无双放)、taker-maker 费拆分(fee-pool 从重算均价一次性算的刻意 dust-sink 也镜像了)、`IOC_BUDGET`/`FOK_BUDGET`、reserve 超额退款(`bidder_hold_price`)——**全部逐行等价**。
+- **期货开仓保证金**(`calculate_init_margin`/`is_valid_leverage`/`calculate_maintenance_margin`/`can_place_margin_order`/`cross_margin_base_allocation`/`calculate_cross_available` ↔ Java 同名):init margin 的"默认档截断、比例档 ceil"quirk、杠杆档严格 floor(`range(..key)`≡`headMap`)、维持保证金分段累加、NSF 的 cross-free-margin 逐仓按各自 symbol scale 求和、cross 分配 `sub_exact` 红线(§7.4#4)、多笔累计/flip——**全部逐行等价**。
+- **期货平仓 PnL**(`close_current_position_futures`/`settle_margin_position_event`/退 extra_margin/removePositionRecord/delivery `settlePnl` ↔ Java 同名):PnL 方向符号(LONG+1/SHORT−1)、平仓费 taker-maker 不串桶、退保证金/退 profit 的 scale、partial 截断无 dust、flip 拆分序、HEDGE 双腿键(`±symbol`)隔离、delivery 无条件结算——**全部逐行等价**。
+
+**唯一真实行为分歧**=`NO_RISK_PROCESSING` 短路模式 Rust 刻意不移植(见 §6,Rust 更严不造钱)。附带 cosmetic 事件层缺口:PLACE_ORDER 期货 `LockPending` Rust 不发(§6 记账/锁事件排除,不动钱)。结论:交易资金路径是忠实移植,无可造钱/丢钱/错转的未记录分歧。
 
 ---
 
@@ -328,6 +339,8 @@ mvn -q -Dtest=ConformanceExporter -DfailIfNoTests=false test
 # 2) Rust replay 同一批 .stream,逐行断言 == .golden
 cargo test --test conformance
 ```
+
+> **⚠ events-on 期货向量的 golden 必须逐向量隔离生成**(`-Dconformance.vectors.dir=<临时目录,只放一个 .stream>`)。Java exporter 全量跑一次会因**双发(R2 `-seq` + main `+seq`)+ `processed` 去重竞态**间歇性**重复捕获** `OPEN_POSITION` 等生命周期事件(同 [[conformance-exporter-async-flaky]]),污染多重集计数。Rust 单发确定,replay 侧(步骤 2)恒定,故只要**一次**拿到干净 golden 入库,CI 就稳定。隔离批量重生成脚本见 `scratchpad/regen_futures_isolated.sh` 思路(每向量单独 `conformance.vectors.dir`)。
 
 - **加一个场景** = 写一个 `.stream`(现货/期货/清算/ADL 皆可)→ Java 导出 golden → Rust 对拍。DSL 缺 verb 就两侧解释器各加一条分支。
 - **引擎行为有意变更** → 同步更新两侧实现 + 重新生成 golden + **评审 golden diff**。
