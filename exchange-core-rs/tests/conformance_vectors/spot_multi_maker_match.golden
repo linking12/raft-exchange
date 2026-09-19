@@ -16,6 +16,10 @@ A 3 1 8
 A 3 2 999172
 FEE 2 32
 EVENTS
+FE LOCKED uid=1 cur=1 free=999996 locked=4
+FE LOCKED uid=2 cur=1 free=999994 locked=6
+FE LOCKED uid=3 cur=2 free=999168 locked=832
+FE UNLOCKED uid=3 cur=2 free=999172 locked=0
 MATCH
 ER NEW NEW uid=1 oid=1 side=ASK maker=0 px=100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0
 ER NEW NEW uid=2 oid=2 side=ASK maker=0 px=101 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0

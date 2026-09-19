@@ -8,3 +8,5 @@ STATE
 A 1 2 1000000000
 A 2 1 100
 EVENTS
+FE LOCKED uid=2 cur=1 free=0 locked=100
+FE UNLOCKED uid=2 cur=1 free=100 locked=0

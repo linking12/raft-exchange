@@ -141,12 +141,17 @@ pub struct RepriceLoanRatesRequest {
 #[derive(Default)]
 pub struct ExchangeApi {
     core: ExchangeCore,
+    #[cfg(any(test, feature = "testing"))]
     last_cmd: Option<OrderCommand>,
 }
 
 impl ExchangeApi {
     pub fn new() -> Self {
-        ExchangeApi { core: ExchangeCore::new(), last_cmd: None }
+        ExchangeApi {
+            core: ExchangeCore::new(),
+            #[cfg(any(test, feature = "testing"))]
+            last_cmd: None,
+        }
     }
 
     pub fn core(&mut self) -> &mut ExchangeCore {
@@ -156,7 +161,10 @@ impl ExchangeApi {
     fn run(&mut self, mut cmd: OrderCommand) -> CommandResultCode {
         self.core.process_command(&mut cmd);
         let rc = cmd.result_code.expect("process_command always sets result_code");
-        self.last_cmd = Some(cmd);
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.last_cmd = Some(cmd);
+        }
         rc
     }
 

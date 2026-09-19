@@ -177,7 +177,9 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **清算命令提交 / 级联执行模型** | `LiquidationEngine`(继承 `LiquidationScheduledService`)持 `commandSubmitter` 回调,生成的 **scan/FORCE/IF/ADL** 调 `submit(cmd)` → `ExchangeCore.setCommandSubmitter` 注入的 `api.submitCommand`:无 raft 直接进 ring buffer、有 raft **经共识后**回流 apply | **回调模型对齐 Java**:`LiquidationEngine`/`LoanLiquidationEngine`/`LiquidationScheduler` 各持 `command_submitter` 回调(Rust `Box<dyn FnMut(OrderCommand)>`);`ExchangeCore::new` 把它注册成"塞进 `ExchangeCore.pending_commands: Rc<RefCell<Vec>>`"(= Java 单节点 ring buffer)。**单节点**=`process_command` 处理完主命令后 inline 自驱 `pending_commands`(逐条再走 R1→ME→R2 直到清空);**集群**=回调改注册成 raft 提交 → `pending` 恒空、驱动循环 no-op,`take_pending_commands` 交外层过共识、提交后逐条回流各自一次 `process_command`。leader-gated 生成不变 | 提交模型两侧已对齐(回调出口,覆盖 scan/FORCE/IF/ADL)。**单节点**驱动序与 **集群** 共识序不同(前者会把 ADL origin 完全消耗后再跑其 stale ADL);但 R1 夹位 `normalizeCmdPositionSize`↔`normalize_cmd_position_size` **两侧逐字节一致**(`min(cmd.size, openVolume)`,`null`/`None` 分支都 `cmd.size=0`),故任何顺序都不造钱,终态一致(见 §7.5)。**raft submitter 实际实现(jraft/aeron)在外层 server,不在本 crate**;库内提供回调出口 + 单测分流(`cluster_mode_hands_cascade_*` / `cluster_mode_cascade_completes_across_rounds_*`)。逐命令结果经 `ExchangeCore.results_consumer`(= Java `resultsConsumer`,`SimpleEventsProcessor` 可挂其上)触发,不再有引擎侧 `last_cascade_events` 聚合。命令 byte 码 `LIQUIDATION_SCAN` 两侧现均=44(Java 原 64 与 `LOAN_IF_DEPOSIT` 撞码,已改,便于上 raft 按码序列化) |
 | **`MARGIN_ALERT`/`LIQUIDATION_ALERT`/`LOAN_MARGIN_CALL`(逐仓风险告警)** | 引擎内随强平扫描发 | Rust 同样发(`liquidation_engine`/`loan_liquidation_engine`) | **在对拍白名单内**:`LIQUIDATION_ALERT` 已由 8 个向量逐值对拍;`MARGIN_ALERT`/`LOAN_MARGIN_CALL` 亦 allowed,当前无向量触发其告警(警戒线)路径(开放盲区,见 §11)。注:此处是**逐仓位风险告警**,与"池子水位告警走外部拉报表"(`pool-monitoring-external`)是两回事 |
 | **仓位生命周期事件** `OPEN_POSITION`/`CLOSE_POSITION` | 每笔成交 taker/maker 各自按"本仓开/增→OPEN、平→CLOSE"发(guard `sizeToOpen>0`/`closedSize>0`) | 规则逐行相同(`settle_margin_position_event`,同 guard) | **已进 ③ 逐事件对拍**(2026-09-19):两侧发射规则经代码深审确认完全一致,168 条 OPEN + 21 条 CLOSE 逐值对拍。⚠ golden **必须隔离(单向量)生成**——Java exporter 全量生成会因双发(R2+main)`processed` 去重竞态重复捕获(见 §10/[[conformance-exporter-async-flaky]]);Rust 单发确定无此问题 |
-| **记账/锁事件** `Deposit`/`Locked`/… | `balance_adjustment` 等会发 | 部分不发 | 排除(只对拍结算类) |
+| **spot 锁事件** `Locked`/`Unlocked` | place 发 Locked;cancel/reduce/reject(`release>0`)、trade 超额退款(`quoteRefund>0`)发 Unlocked | 规则已对齐 Java(2026-09-19 修 3 处发射:sell handler maker 退款 Unlocked、buy handler taker 退款 Unlocked、reject 加 `release>0` 守卫,见 §7.8) | **已进 ③ 逐事件对拍**;金额中性(只补/收敛报告事件,账户/lock 算术不变) |
+| **记账事件** `Deposit`/`Withdraw` | `balance_adjustment` 等会发 | 部分不发 | 排除(非锁/结算类;`INTERNAL_TRANSFER` 已单独进对拍) |
+| **futures 锁事件** `LockPending`/`UnlockPending` | place/close 的 R1 保证金预锁发 | 部分不发(CLOSE_POSITION 已补,PLACE_ORDER 未补) | 未进逐事件对拍(margin 预锁,冗余于 `OPEN_POSITION`/STATE);开放项 |
 | **撮合明细事件(高层报告)** | `SpotExecutionReport`/`FuturesExecutionReport` | 经 `SimpleEventsProcessor` 产出同型报告 | **同步向量已进 ③**(`#!match=on` 的 `MATCH` 段,`ER`/`ERF` 逐字段);异步清算向量仍只靠 ① |
 | **执行报告 exec-id / trade-id** | `seq` 由 disruptor 定(R2 `-seq` + 主 `+seq` 双发) | `results_seq` 单发递增 | `ER`/`ERF` **剔除** `tid`/`eid`(seq 口径刻意不同);taker==maker 共享 id 的不变式由 ① + `simple_events_processor` 单测覆盖 |
 | **`SimpleEventsProcessor` 出口结构** | `accept(cmd,seq)` 双发(`seq<0` R2 只发 fund event、`seq>=0` 发执行报告+fund+行情),`processed` 标志跨两发去重;fund event 分 `takerFundEvents`(isMaker=false)与 `makerFundEventsByShard[]`(isMaker=true,分片) | `process()` 单发(执行报告+fund+行情一次出);fund event 收敛成扁平 `cmd.fund_events`(exec-id 的 isMaker 位恒 false),无 `processed` 标志、无分片 | 单线程/单分片塌缩的必然结果:单发=Java 两发的并集,**发出的 fund event 集合与执行报告逐字段一致**(exec-id 已按上一行剔除);taker/maker 拆分与 isMaker 位仅影响被剔除的 exec-id |
@@ -193,7 +195,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 
 > **已消除的差异**:funding receiver 余数 dust 归属曾是刻意差异(Java 按 `LongLongHashMap` hash 序、Rust 按 `BTreeMap` 升序)。2026-09-17 已把 Java `FundingFeeCommandProcessor` 余数分配改为 **uid 升序**(`keySet().toSortedArray()`)= Rust,两侧一致且 Java oracle 更确定。现由 `funding_multi_receiver_dust` / `funding_zero_share_receiver` / `funding_multi_payer_multi_receiver` 三个 events-on 向量对拍。
 
-**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的,共 18 类):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`、`MARGIN_ALERT`、`LIQUIDATION_ALERT`、`LOAN_MARGIN_CALL`、`OPEN_POSITION`、`CLOSE_POSITION`。两侧白名单必须与 `fe_allowed` 同步维护。**当前 allowed 但无向量覆盖**:`MARGIN_ALERT`、`LOAN_MARGIN_CALL`(告警警戒线路径无向量触发)。
+**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的,共 20 类):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`、`MARGIN_ALERT`、`LIQUIDATION_ALERT`、`LOAN_MARGIN_CALL`、`OPEN_POSITION`、`CLOSE_POSITION`、`LOCKED`、`UNLOCKED`。两侧白名单必须与 `fe_allowed` 同步维护。**当前 allowed 但无向量覆盖**:`MARGIN_ALERT`、`LOAN_MARGIN_CALL`(告警警戒线路径无向量触发)。
 
 ---
 
@@ -270,6 +272,17 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 - **期货平仓 PnL**(`close_current_position_futures`/`settle_margin_position_event`/退 extra_margin/removePositionRecord/delivery `settlePnl` ↔ Java 同名):PnL 方向符号(LONG+1/SHORT−1)、平仓费 taker-maker 不串桶、退保证金/退 profit 的 scale、partial 截断无 dust、flip 拆分序、HEDGE 双腿键(`±symbol`)隔离、delivery 无条件结算——**全部逐行等价**。
 
 **唯一真实行为分歧**=`NO_RISK_PROCESSING` 短路模式 Rust 刻意不移植(见 §6,Rust 更严不造钱)。附带 cosmetic 事件层缺口:PLACE_ORDER 期货 `LockPending` Rust 不发(§6 记账/锁事件排除,不动钱)。结论:交易资金路径是忠实移植,无可造钱/丢钱/错转的未记录分歧。
+
+### 7.8 逐事件对拍扩面(2026-09-19):OPEN/CLOSE_POSITION + spot Locked/Unlocked 进 ③,修 3 处 spot 发射缺口
+
+把交易内生命周期/锁事件也纳入 ③ 逐事件对拍(`fe_allowed` 加 `OPEN_POSITION`/`CLOSE_POSITION`/`LOCKED`/`UNLOCKED`,两侧白名单同步)。
+
+- **OPEN/CLOSE_POSITION**:代码深审确认两侧发射规则逐行相同(per-fill per-side,guard `size_to_open>0`/`closed_size>0`),Rust 确定性正确;启用后暴露的"多一条"纯是 Java exporter **双发+`processed` 竞态重复捕获**(见 §10),非引擎分歧。
+- **spot `Locked`/`Unlocked`**:逐事件对拍抓到 3 处 Rust 与 Java 的**发射**差异(均金额中性,只动事件不动账户算术),已修 `risk_engine.rs`:
+  1. **GAP A**:`handle_matcher_events_exchange_sell` maker 超额退款(`quote_refund>0`)漏发 `Unlocked`(Java `RiskEngine.java:1180`)→ 补发。
+  2. **GAP B**:`handle_matcher_events_exchange_buy` taker 超额退款(`quote_refund>0`)漏发 `Unlocked`(Java `:1324`)→ 补发。
+  3. **多发**:`handle_matcher_reject_reduce_event_exchange` 的 `Unlocked` 缺 `release>0` 守卫(Java `:1121`),IOC_BUDGET 部分成交余量(`release==0`)时 Rust 多发一条 → 加守卫。
+- 修后 `it_spot_futures_mixed` 两个 spot fill 事件序列测试按对齐后行为更新(补 Unlocked)。全绿:lib 993 / conformance 86 向量 / e2e 36 / integration 357。
 
 ---
 

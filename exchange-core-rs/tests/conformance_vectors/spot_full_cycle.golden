@@ -10,3 +10,5 @@ A 1 2 20000
 A 2 1 1
 A 2 2 9980000
 EVENTS
+FE LOCKED uid=1 cur=1 free=999999 locked=1
+FE LOCKED uid=2 cur=2 free=9980000 locked=20000

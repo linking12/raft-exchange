@@ -35,7 +35,7 @@ pub struct ExchangeCore {
     pub ssp: SymbolSpecificationProvider,
     pending_commands: Rc<RefCell<Vec<OrderCommand>>>,
     ser_proc: Box<dyn SerializationProcessor>,
-    results_consumer: Option<Box<dyn ResultsConsumer>>,
+    results_consumer: Box<dyn ResultsConsumer>,
     results_seq: i64,
     liquidation_scheduler: LiquidationScheduler,
 }
@@ -55,7 +55,7 @@ impl ExchangeCore {
             ssp: SymbolSpecificationProvider::new(),
             pending_commands: Rc::new(RefCell::new(Vec::new())),
             ser_proc: Box::new(InMemorySerializationProcessor::new()),
-            results_consumer: Some(Box::new(SimpleEventsProcessor::new(NoopEventsHandler, NoopEventsHandler))),
+            results_consumer: Box::new(SimpleEventsProcessor::new(NoopEventsHandler, NoopEventsHandler)),
             results_seq: 0,
             liquidation_scheduler: LiquidationScheduler::new(10, 30, 0),
         };
@@ -79,11 +79,11 @@ impl ExchangeCore {
         T: TradeEventsHandler + 'static,
         F: FundEventsHandler + 'static,
     {
-        self.results_consumer = Some(Box::new(SimpleEventsProcessor::new(trade, fund)));
+        self.results_consumer = Box::new(SimpleEventsProcessor::new(trade, fund));
     }
 
     pub fn with_results_consumer(&mut self, consumer: Box<dyn ResultsConsumer>) {
-        self.results_consumer = Some(consumer);
+        self.results_consumer = consumer;
     }
 
     pub fn process_command(&mut self, cmd: &mut OrderCommand) {
@@ -127,9 +127,7 @@ impl ExchangeCore {
         self.risk.handler_risk_release(cmd, &mut self.ups, &self.ssp);
         let seq = self.results_seq;
         self.results_seq += 1;
-        if let Some(h) = self.results_consumer.as_mut() {
-            h.consume(cmd, seq, &self.ssp, &self.ups);
-        }
+        self.results_consumer.consume(cmd, seq, &self.ssp, &self.ups);
     }
 
     pub fn start_liquidation_scheduler(&mut self) {

@@ -70,7 +70,8 @@ public class ConformanceExporter {
             "IF_POSITION_CLOSE", "ADL_ORIGIN_CLOSE", "ADL_POSITION_CLOSE",
             "LOAN_BORROW", "LOAN_REPAY", "LOAN_LIQUIDATED", "INTERNAL_TRANSFER",
             "MARGIN_ALERT", "LIQUIDATION_ALERT", "LOAN_MARGIN_CALL",
-            "OPEN_POSITION", "CLOSE_POSITION");
+            "OPEN_POSITION", "CLOSE_POSITION", "LOCKED", "UNLOCKED",
+            "LOCK_PENDING", "UNLOCK_PENDING");
 
     private static final TreeSortedMap<Long, Long> MM = TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L);
     private static final TreeSortedMap<Long, Long> LEV = TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L);
