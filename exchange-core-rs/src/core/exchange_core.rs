@@ -9,6 +9,8 @@ use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::margin_mode::MarginMode;
 use crate::core::processors::liquidation::command_submitter::{CommandSubmitter, VecCommandSink};
 use crate::core::simple_events_processor::{NoopEventsHandler, SimpleEventsProcessor};
+use crate::core::trade_events_handler::TradeEventsHandler;
+use crate::core::fund_events_handler::FundEventsHandler;
 use crate::core::processors::liquidation::scheduler::LiquidationScheduler;
 use crate::core::processors::matching_engine_router::MatchingEngineRouter;
 use crate::core::processors::risk_engine::RiskEngine;
@@ -71,6 +73,14 @@ impl ExchangeCore {
     pub fn with_command_submitter(&mut self, submitter: Rc<RefCell<dyn CommandSubmitter>>) {
         self.liquidation_scheduler.set_command_submitter(submitter.clone());
         self.risk.liquidation_engine.set_command_submitter(submitter);
+    }
+
+    pub fn with_events_handlers<T, F>(&mut self, trade: T, fund: F)
+    where
+        T: TradeEventsHandler + 'static,
+        F: FundEventsHandler + 'static,
+    {
+        self.results_consumer = Some(Box::new(SimpleEventsProcessor::new(trade, fund)));
     }
 
     pub fn with_results_consumer(&mut self, consumer: Box<dyn ResultsConsumer>) {
