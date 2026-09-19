@@ -43,6 +43,14 @@
 - ③ 用 **Java 引擎的实际输出**当 oracle,补上 ① 的 oracle 盲区(清算/ADL 的最终状态现在能逐值对拍)、并让两侧入 CI 抗漂移。
 - ③b 在 ③ 之上用随机流把输入空间压满。
 
+### 1.1 完成状态(2026-09-19)
+
+**作为独立的确定性撮合引擎(单节点 / 纯 Rust raft 集群),Rust 端口已达可上线级完成度、与 Java 撮合语义对齐。** 撮合 + 风控 + 结算全域(现货 / 期货隔离·全仓·HEDGE / 清算·ADL·IF / funding / loan 隔离·cross / 交割)经**逐行深审 + 五道防线**验证:交易资金三路径逐行零分歧;报表 / 校验 / 两步 apply 三层新对比基本零分歧;① IT 翻译 357 + ①b 组件 78 + ② 守恒 proptest(含 funding/HEDGE/cross)+ ③ 黄金向量 **89**(全 27 类 `FundEventType` 逐事件 + 14 个 `#!match=on` 的 ER/ERF)+ ③b 差分模糊,全绿(lib 993)。快照 Chronicle 读写与 Java 双向逐字节对齐。历次抓到并修的真分歧见 §7。
+
+**刻意不移植**(单线程确定性状态机下 N/A,非缺口):Disruptor 多分片 / 异步提交层 / `groupingControl` / `NO_RISK_PROCESSING` / journaling(log 即 raft)——见 §6。
+
+**仍开放的边界**(不属于引擎撮合本体,仅"Rust 节点混入现有 Java raft 集群热迁移"才需要):① **混合集群命令流兼容**——`BinaryCommandsProcessor` 的解码 / 推进未移植(现仅快照透传),Rust 节点消费 `BINARY_DATA_COMMAND`(批量 add symbol/currency 等)尚需这块,**纯 Rust 集群不需要**;② **真·live 同进程双引擎比对**——刻意用离线 golden 差分替代(§11)。
+
 ---
 
 ## 2. 防线①:IT 翻译对拍
