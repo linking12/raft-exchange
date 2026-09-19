@@ -14,6 +14,8 @@ A 2 2 99999983
 POS 2 200 LONG 8 8030 40 0
 FEE 2 26
 EVENTS
+FE DEPOSIT uid=1 cur=2 free=100000000 locked=0
+FE DEPOSIT uid=2 cur=2 free=100000000 locked=0
 FE LOCK_PENDING uid=1 cur=2 free=99999947 locked=48
 FE LOCK_PENDING uid=1 cur=2 free=99999965 locked=35
 FE LOCK_PENDING uid=2 cur=2 free=99999942 locked=48

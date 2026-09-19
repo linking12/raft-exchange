@@ -1,3 +1,4 @@
+#!match=on
 # 完整 FORCE→IF→ADL 三步级联:loser 巨亏、书面无流动性 → FORCE 拒;IF 注资**不足**(100 « 覆盖整仓所需)
 # → IF all-or-nothing 拒 + 释放预留 → 逃逸 ADL 减盈利对手方。与 adl(无 IF,跳过 IF)/ futures_if_takeover(IF 足,停在 IF)
 # 互补:此处 IF 被**试过并拒**,验证 IF 不足时正确升级到 ADL(预留释放 + 不重复接管)。events-on。

@@ -6,5 +6,6 @@ STATE
 A 2 1 100
 A 2 2 50000
 EVENTS
+FE DEPOSIT uid=2 cur=1 free=100 locked=0
 FE LOAN_BORROW uid=2 cur=2 free=50000 locked=0
 FE LOAN_MARGIN_CALL uid=2 cur=2 free=0 locked=0

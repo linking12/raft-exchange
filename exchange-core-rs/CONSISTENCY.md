@@ -195,7 +195,7 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 
 > **已消除的差异**:funding receiver 余数 dust 归属曾是刻意差异(Java 按 `LongLongHashMap` hash 序、Rust 按 `BTreeMap` 升序)。2026-09-17 已把 Java `FundingFeeCommandProcessor` 余数分配改为 **uid 升序**(`keySet().toSortedArray()`)= Rust,两侧一致且 Java oracle 更确定。现由 `funding_multi_receiver_dust` / `funding_zero_share_receiver` / `funding_multi_payer_multi_receiver` 三个 events-on 向量对拍。
 
-**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的,共 22 类):`LIQUIDATION_CLOSE`、`LIQUIDATION_FEE`、`FUNDINGFEE_SETTLEMENT`、`PNL_SETTLEMENT`、`MARGIN_ADJUST`、`MARGIN_REFUND`、`IF_POSITION_CLOSE`、`ADL_ORIGIN_CLOSE`、`ADL_POSITION_CLOSE`、`LOAN_BORROW`、`LOAN_REPAY`、`LOAN_LIQUIDATED`、`INTERNAL_TRANSFER`、`MARGIN_ALERT`、`LIQUIDATION_ALERT`、`LOAN_MARGIN_CALL`、`OPEN_POSITION`、`CLOSE_POSITION`、`LOCKED`、`UNLOCKED`、`LOCK_PENDING`、`UNLOCK_PENDING`。两侧白名单必须与 `fe_allowed` 同步维护。**全部已有向量覆盖**(2026-09-19 补齐 `INTERNAL_TRANSFER`/`MARGIN_ALERT`/`LOAN_MARGIN_CALL`)。仅 27 种 `FundEventType` 中的 `Deposit`/`Withdraw`(纯记账,非锁/结算)刻意留在白名单外。
+**对拍白名单**(`tests/conformance.rs::fe_allowed`,进 `EVENTS`/`FE` 多重集的,共 **24/27** 类):27 种 `FundEventType` 中已纳入 24 类逐事件对拍(2026-09-19 补齐 `Deposit`/`Withdraw`,314 条 DEPOSIT 已对拍;`Withdraw` 已启用,发射与 Deposit 同源已对齐,当前无负向 balance-adjustment 向量触发)。两侧白名单必须与 `fe_allowed` 同步维护。**仍未进 ③ 的 3 类**:`Transfer`(现货成交结算双腿,已由 ① `it_spot_futures_mixed` 逐事件覆盖)、`LoanCollateralChange`、`ResetFee`——开放项。
 
 ---
 

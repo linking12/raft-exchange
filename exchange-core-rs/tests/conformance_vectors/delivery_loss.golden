@@ -9,6 +9,8 @@ STATE
 A 1 2 998000
 A 2 2 1002000
 EVENTS
+FE DEPOSIT uid=1 cur=2 free=1000000 locked=0
+FE DEPOSIT uid=2 cur=2 free=1000000 locked=0
 FE LOCK_PENDING uid=1 cur=2 free=999900 locked=100
 FE LOCK_PENDING uid=2 cur=2 free=999900 locked=100
 FE OPEN_POSITION uid=1 cur=2 free=999900 locked=100

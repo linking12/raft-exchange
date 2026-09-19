@@ -178,14 +178,24 @@ public final class GroupingProcessor implements EventProcessor {
                             msgsInGroup = 0;
                         }
 
-                        // 读全局 R2 改动态（loan pool 等）的命令须独占 group：组边界同步冲完前组 R2，R1 才读到确定值
-                        if (R2Sync.needSyncR2Global(cmd)) {
+                        // REPRICE_LOAN_RATES 既在 R1 读跨 shard 聚合的 loan pool、又在 R2 写浮动利率状态
+                        // （currentRateBps / accRateBpsMs / lastRepriceTs），而后续 loan 命令在 R1 读这些利率状态。
+                        // 组内 R2 副作用只在【组边界】统一冲，故 reprice 必须独占一个 group——前后各断一次组：
+                        //   组首边界：前面所有命令的 R2 先冲完，reprice 的 R1 才读到确定的 pool；
+                        //   组尾边界：reprice 自己的 R2 利率写先冲完，下一条命令的 R1 才读到新利率。
+                        // 只断组首（旧逻辑）时 reprice 仅是组首、仍与后续 loan 命令同组 → 那些命令 R1 读到 reprice 前旧利率；
+                        // 且分组边界随 live（墙钟批 maxGroupDurationNs）/ replay（计数批 msgsInGroupLimit）漂移，同组/异组不稳定
+                        // → 各 raft 副本利息分叉、install-snapshot 重放节点与 live 永久不一致。独占后 reprice 的 R2 恒在下条 R1 前冲。
+                        final boolean repriceExclusiveGroup = R2Sync.needSyncR2Global(cmd);
+                        if (repriceExclusiveGroup) { // 组首边界
                             groupCounter++;
                             msgsInGroup = 0;
                         }
-
                         cmd.eventsGroup = groupCounter;
-
+                        if (repriceExclusiveGroup) { // 组尾边界：下一条命令另起新组
+                            groupCounter++;
+                            msgsInGroup = 0;
+                        }
 
                         if (triggerL2DataRequest) {
                             triggerL2DataRequest = false;

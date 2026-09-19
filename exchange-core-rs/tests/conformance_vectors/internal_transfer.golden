@@ -9,6 +9,7 @@ STATE
 A 1 1 750
 A 2 1 250
 EVENTS
+FE DEPOSIT uid=1 cur=1 free=1000 locked=0
 FE INTERNAL_TRANSFER uid=1 cur=1 free=700 locked=0
 FE INTERNAL_TRANSFER uid=1 cur=1 free=750 locked=0
 FE INTERNAL_TRANSFER uid=2 cur=1 free=250 locked=0

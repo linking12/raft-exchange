@@ -1,3 +1,4 @@
+#!match=on
 # CROSS 跨仓清算(干净 FORCE,无 ADL):uid1 用同一账户在 A/B 两 symbol 各开 CROSS LONG10(共享保证金)。
 # A mark 硬暴跌(1000→500)触发 cross 账户级维持保证金击穿 → 清算 A;对手方 uid2 在 A 高位挂 BID@990(覆盖价),
 # FORCE 清算单直接成交(不逃逸到 ADL)→ A 平仓、B 保留、uid1 未破产。镜像 liquidation_isolated 的「硬暴跌触发 + 高价 BID 覆盖」。
