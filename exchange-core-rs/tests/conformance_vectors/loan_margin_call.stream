@@ -1,0 +1,13 @@
+# 逐仓 loan LOAN_MARGIN_CALL:LTV 落入 marginCallLtv ≤ LTV < liqLtv 带,未触发强平。
+# 单次 MARK_AT 触发。借款人 uid 须偶数(loan 池分片本地性);rateMode=0 + ts 不变使利息=0。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_SPOT id=500 base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 initialLtv=6000 liqLtv=8000 marginCallLtv=7500 maxAmount=0 maxTermDays=0
+MARK sym=500 price=1000
+USER uid=2
+BAL uid=2 cur=1 amount=100 txid=1
+POOL_DEPOSIT cur=2 amount=1000000 txid=9
+LOAN_CREATE uid=2 sym=500 loanId=9001 collateral=100 principal=50000 rateMode=0 ts=0 txid=10
+ENABLE_LIQ
+# mark=650: collateral_value=65000, ltv_scaled=5e8; liq需>=5.2e8(未达),marginCall需>=4.875e8(达)-> LOAN_MARGIN_CALL uid=2
+MARK_AT sym=500 price=650 ts=2000

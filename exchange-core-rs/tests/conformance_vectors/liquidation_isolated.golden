@@ -14,6 +14,12 @@ FE CLOSE_POSITION uid=2 cur=2 free=997912 locked=1788
 FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
 FE LIQUIDATION_CLOSE uid=1 cur=2 free=2700 locked=0
 FE LIQUIDATION_FEE uid=1 cur=2 free=1900 locked=0
+FE LOCK_PENDING uid=1 cur=2 free=1800 locked=1200
+FE LOCK_PENDING uid=2 cur=2 free=997820 locked=1980
+FE LOCK_PENDING uid=2 cur=2 free=998800 locked=1200
 FE OPEN_POSITION uid=1 cur=2 free=1900 locked=1000
 FE OPEN_POSITION uid=2 cur=2 free=998800 locked=1000
 FE PNL_SETTLEMENT uid=1 cur=2 free=1900 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=3000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=1000000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=998500 locked=1300

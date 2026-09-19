@@ -12,6 +12,10 @@ STATE
 A 1 2 1000000
 A 2 2 1000000
 EVENTS
+FE LOCK_PENDING uid=1 cur=2 free=999800 locked=200
+FE LOCK_PENDING uid=1 cur=2 free=999900 locked=100
+FE LOCK_PENDING uid=2 cur=2 free=999800 locked=200
+FE LOCK_PENDING uid=2 cur=2 free=999900 locked=100
 FE OPEN_POSITION uid=1 cur=2 free=999800 locked=200
 FE OPEN_POSITION uid=1 cur=2 free=999900 locked=100
 FE OPEN_POSITION uid=2 cur=2 free=999800 locked=200
@@ -20,3 +24,7 @@ FE PNL_SETTLEMENT uid=1 cur=2 free=1000000 locked=0
 FE PNL_SETTLEMENT uid=1 cur=2 free=1001900 locked=100
 FE PNL_SETTLEMENT uid=2 cur=2 free=1000000 locked=0
 FE PNL_SETTLEMENT uid=2 cur=2 free=997900 locked=100
+FE UNLOCK_PENDING uid=1 cur=2 free=1000000 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=999900 locked=100
+FE UNLOCK_PENDING uid=2 cur=2 free=1000000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=999900 locked=100

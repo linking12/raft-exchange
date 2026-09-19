@@ -14,10 +14,18 @@ A 2 2 99999983
 POS 2 200 LONG 8 8030 40 0
 FEE 2 26
 EVENTS
+FE LOCK_PENDING uid=1 cur=2 free=99999947 locked=48
+FE LOCK_PENDING uid=1 cur=2 free=99999965 locked=35
+FE LOCK_PENDING uid=2 cur=2 free=99999942 locked=48
+FE LOCK_PENDING uid=2 cur=2 free=99999965 locked=35
 FE OPEN_POSITION uid=1 cur=2 free=99999951 locked=40
 FE OPEN_POSITION uid=1 cur=2 free=99999970 locked=25
 FE OPEN_POSITION uid=2 cur=2 free=99999943 locked=40
 FE OPEN_POSITION uid=2 cur=2 free=99999965 locked=25
+FE UNLOCK_PENDING uid=1 cur=2 free=100000000 locked=0
+FE UNLOCK_PENDING uid=1 cur=2 free=99999970 locked=25
+FE UNLOCK_PENDING uid=2 cur=2 free=100000000 locked=0
+FE UNLOCK_PENDING uid=2 cur=2 free=99999965 locked=25
 MATCH
 ERF NEW NEW uid=1 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
 ERF NEW NEW uid=2 oid=2 side=BID maker=0 pos=HEDGE cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0

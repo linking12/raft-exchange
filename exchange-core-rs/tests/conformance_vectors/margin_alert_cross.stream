@@ -1,0 +1,15 @@
+# 全仓期货 MARGIN_ALERT:cross equity 落入告警带(total_maint ≤ equity < total_maint*6/5)但未强平。
+# 单次 MARK_AT 触发。uid=1 cross 多头进告警带,uid=2 cross 空头大额保持健康。零费使 crossAvailable=存款。
+CUR id=1 digit=0
+CUR id=2 digit=0
+SYM_FUT id=10200 kind=PERP base=1 quote=2 baseScale=1 quoteScale=1 taker=0 maker=0 feeScale=0 initMargin=1 initMarginScaleK=100
+MARK sym=10200 price=10000
+USER uid=1
+USER uid=2
+BAL uid=1 cur=2 amount=10500 txid=1
+BAL uid=2 cur=2 amount=1000000 txid=2
+PLACE_FUT oid=1 uid=2 sym=10200 price=10000 size=10 action=ASK margin=CROSS leverage=1
+PLACE_FUT oid=2 uid=1 sym=10200 price=10000 size=10 action=BID margin=CROSS leverage=1
+ENABLE_LIQ
+# P=9000: total_maint=450, equity=500, total_maint*6/5=540 -> 450<=500<540 -> MARGIN_ALERT uid=1
+MARK_AT sym=10200 price=9000 ts=2000
