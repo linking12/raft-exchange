@@ -17,23 +17,14 @@ use crate::core::utils::core_arithmetic_utils as arithmetic;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserProfile {
     pub uid: i64,
-
     pub user_status: UserStatus,
-
     pub accounts: BTreeMap<i32, i64>,
-
     pub exchange_locked: BTreeMap<i32, i64>,
-
     pub processed_tx_ids: TimeWindowDedupSet,
-
     pub position_mode: PositionMode,
-
     pub positions: BTreeMap<i32, SymbolPositionRecord>,
-
     pub isolated_loans: BTreeMap<i64, IsolatedLoanRecord>,
-
     pub cross_loan_collateral: BTreeMap<i32, i64>,
-
     pub cross_loans: BTreeMap<i64, CrossLoanRecord>,
 }
 

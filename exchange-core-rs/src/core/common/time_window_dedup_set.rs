@@ -8,9 +8,7 @@ pub const DEFAULT_HARD_CAP: usize = 1 << 16;
 pub struct TimeWindowDedupSet {
     window_ms: i64,
     hard_cap: usize,
-
     entries: VecDeque<(i64, i64)>,
-
     ids: HashSet<i64>,
 }
 

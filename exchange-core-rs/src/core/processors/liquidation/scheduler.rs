@@ -19,7 +19,6 @@ pub struct LiquidationScheduler {
     pub reprice_every_n_ticks: i64,
     pub shard_id: i32,
     pub is_running: bool,
-
     command_submitter: CommandSubmitterHandle,
 }
 

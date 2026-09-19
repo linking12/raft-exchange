@@ -1,14 +1,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SymbolLoanSpecification {
-
     pub initial_ltv_bps: i32,
-
     pub liquidation_ltv_bps: i32,
-
     pub margin_call_ltv_bps: i32,
-
     pub max_amount: i64,
-
     pub max_term_days: i32,
 }
 

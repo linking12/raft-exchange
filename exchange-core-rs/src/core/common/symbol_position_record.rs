@@ -12,33 +12,20 @@ pub struct SymbolPositionRecord {
     pub uid: i64,
     pub symbol: i32,
     pub currency: i32,
-
     pub direction: PositionDirection,
-
     pub open_volume: i64,
-
     pub open_init_margin_sum: i64,
-
     pub open_price_sum: i64,
-
     pub profit: i64,
-
     pub pending_sell_size: i64,
-
     pub pending_buy_size: i64,
     pub pending_sell_avg_price: i64,
     pub pending_buy_avg_price: i64,
-
     pub leverage: i32,
-
     pub margin_mode: MarginMode,
-
     pub extra_margin: i64,
-
     pub pending_adl_size: i64,
-
     pub adl_eligibility: i64,
-
     pub liquidation_flow: Option<LiquidationFlow>,
 }
 

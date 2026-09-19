@@ -2,27 +2,16 @@ use crate::core::common::loan_record::LoanRecord;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CrossLoanRecord {
-
     pub uid: i64,
-
     pub loan_id: i64,
-
     pub symbol_id: i32,
-
     pub loan_currency: i32,
-
     pub rate_bps: i32,
-
     pub opened_at_ts: i64,
-
     pub outstanding_principal: i64,
-
     pub accumulated_interest: i64,
-
     pub last_accrue_ts: i64,
-
     pub acc_snapshot: i64,
-
     pub cum_interest_paid: i64,
 }
 

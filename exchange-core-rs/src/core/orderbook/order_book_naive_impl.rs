@@ -17,7 +17,6 @@ use crate::core::utils::core_arithmetic_utils::{add_exact, mul_exact, sub_exact}
 pub struct OrderBookNaiveImpl {
     ask_buckets: BTreeMap<i64, OrdersBucketNaive>,
     bid_buckets: BTreeMap<i64, OrdersBucketNaive>,
-
     id_index: BTreeMap<i64, (OrderAction, i64, i64)>,
     symbol_spec: Option<CoreSymbolSpecification>,
 }

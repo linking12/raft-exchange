@@ -24,7 +24,6 @@ pub struct MakerFill {
 pub struct OrdersBucketNaive {
     price: i64,
     total_volume: i64,
-
     next_seq: i64,
     entries: BTreeMap<i64, Order>,
     id_to_seq: BTreeMap<i64, i64>,

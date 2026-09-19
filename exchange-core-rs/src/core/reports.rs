@@ -92,9 +92,7 @@ pub struct SingleUserReport {
     pub exchange_locked: BTreeMap<i32, i64>,
     pub positions: Vec<PositionView>,
     pub cross_account_ltv_bps: i64,
-
     pub isolated_loans: Vec<(i64, i32, i32, i32, i64, i64, i64, i32, i64, i64, i64, i64)>,
-
     pub cross_loans: Vec<(i64, i32, i32, i64, i64, i32, i64, i64)>,
     pub cross_loan_collateral: BTreeMap<i32, i64>,
     pub orders: Vec<(i32, Order)>,

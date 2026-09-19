@@ -9,14 +9,12 @@ pub struct Order {
     pub size: i64,
     pub filled: i64,
     pub filled_notional: i64,
-
     pub reserve_bid_price: i64,
     pub action: OrderAction,
     pub order_type: OrderType,
     pub uid: i64,
     pub timestamp: i64,
     pub user_cookie: i32,
-
     pub command: OrderCommandType,
 }
 
