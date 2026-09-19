@@ -10,6 +10,8 @@ A 2 2 98000
 A 4 1 100
 A 4 2 900000
 EVENTS
+FE DEPOSIT uid=2 cur=1 free=100 locked=0
+FE DEPOSIT uid=4 cur=2 free=1000000 locked=0
 FE LOAN_BORROW uid=2 cur=2 free=50000 locked=0
 FE LOAN_LIQUIDATED uid=2 cur=2 free=98000 locked=0
 FE LOCKED uid=4 cur=2 free=900000 locked=100000

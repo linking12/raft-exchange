@@ -1,3 +1,4 @@
+#!match=on
 # ADL 多对手方:loser uid1 LONG15 巨亏强平,无书面流动性 → ADL 减多个盈利空仓对手方。
 # 三个等权 winner(uid2/4/6 各 SHORT5 @1000,同价同量 → 同 risk_score)→ 考验 tie-break 选择序(Java sortByLong.reverseThis)+ 贪心分配(需减 15 = 5+5+5,三个都吃)+ 逐对手方 ADL_POSITION_CLOSE 事件。
 # uid3 深流动性提供者(开仓用,最终净平)。镜像 adl 但多对手方。events-on。

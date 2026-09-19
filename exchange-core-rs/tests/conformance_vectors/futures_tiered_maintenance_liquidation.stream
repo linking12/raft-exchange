@@ -1,3 +1,4 @@
+#!match=on
 # 分层维持保证金清算:开一个名义价值落进 maintenanceMargin 高档位的大仓,暴跌强平。
 # 维持保证金表 {1000:5, 100000:10}(scaleK=1000):notional<100000 走 rate 5,≥100000 走 rate 10。
 # 本向量 price=10000 size=20 → notional=200000,压**高档(rate 10)**;现有 liq 向量都是小仓、只碰低档。

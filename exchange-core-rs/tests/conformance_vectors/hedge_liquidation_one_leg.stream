@@ -1,3 +1,4 @@
+#!match=on
 # HEDGE 单腿清算:uid1 双向 ISOLATED 持仓 LONG10 + SHORT5;mark 硬暴跌(1000→500)。
 # LONG 腿(逐仓)亏损被击穿 → 只强平 LONG 腿(+symbol),SHORT 腿(-symbol,暴跌下反而浮盈)保留、不被误伤。
 # 对手方 uid2 高价 BID@990 覆盖 → 干净 FORCE(不逃 ADL)。验证清算按 create_positions_key 精确定位亏损腿。events-on。

@@ -15,6 +15,9 @@ A 2 2 10000
 A 4 1 999999
 A 4 2 10200
 EVENTS
+FE DEPOSIT uid=1 cur=2 free=1000000000 locked=0
+FE DEPOSIT uid=2 cur=1 free=1000000 locked=0
+FE DEPOSIT uid=4 cur=1 free=1000000 locked=0
 FE LOCKED uid=1 cur=2 free=999979600 locked=20400
 FE LOCKED uid=2 cur=1 free=999999 locked=1
 FE LOCKED uid=4 cur=1 free=999999 locked=1

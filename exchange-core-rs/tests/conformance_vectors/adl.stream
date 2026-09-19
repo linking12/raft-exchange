@@ -1,3 +1,4 @@
+#!match=on
 # ADL:loser 巨亏强平,无书面流动性、无 IF → 减 winner 盈利空仓(10→5)。状态+结算事件对拍。镜像 Java testADL。
 # Java 用默认杠杆(1% base initMargin 率);此处 leverage=1 等价。SCAN 需多轮触发 FORCE→IF→ADL 级联。
 CUR id=1 digit=0

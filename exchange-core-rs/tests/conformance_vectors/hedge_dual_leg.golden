@@ -18,6 +18,9 @@ POS 2 7001 SHORT 5 5000 500 0
 A 3 2 1000000
 POS 3 7001 LONG 5 5000 500 0
 EVENTS
+FE DEPOSIT uid=1 cur=2 free=1000000 locked=0
+FE DEPOSIT uid=2 cur=2 free=1000000 locked=0
+FE DEPOSIT uid=3 cur=2 free=1000000 locked=0
 FE LOCK_PENDING uid=1 cur=2 free=999000 locked=1000
 FE LOCK_PENDING uid=1 cur=2 free=999500 locked=500
 FE LOCK_PENDING uid=2 cur=2 free=999500 locked=500

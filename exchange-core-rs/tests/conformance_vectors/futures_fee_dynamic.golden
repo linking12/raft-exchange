@@ -11,6 +11,8 @@ A 2 2 999999
 POS 2 8006 SHORT 10 10000 1000 0
 FEE 2 2
 EVENTS
+FE DEPOSIT uid=1 cur=2 free=1000000 locked=0
+FE DEPOSIT uid=2 cur=2 free=1000000 locked=0
 FE LOCK_PENDING uid=1 cur=2 free=998999 locked=1001
 FE LOCK_PENDING uid=2 cur=2 free=998999 locked=1001
 FE OPEN_POSITION uid=1 cur=2 free=998999 locked=1000

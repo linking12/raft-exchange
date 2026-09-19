@@ -154,6 +154,8 @@ fn fe_allowed(t: FundEventType) -> bool {
             | Unlocked
             | LockPending
             | UnlockPending
+            | Deposit
+            | Withdraw
     )
 }
 

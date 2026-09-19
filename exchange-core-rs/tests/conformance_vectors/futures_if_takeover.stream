@@ -1,3 +1,4 @@
+#!match=on
 # 期货 IF 接管:loser 巨亏被强平、书面无流动性 → FORCE 拒 → IF 已注资则由 IF 接管(IF_POSITION_CLOSE),不走 ADL。
 # 与 adl.stream 的区别仅在开局 IF_DEPOSIT 注资:adl 无 IF 故级联到 ADL,此处 IF 有钱故停在 IF 阶段。
 # 事件级对拍(IF_POSITION_CLOSE 等结算类)。SCAN 循环触发 FORCE→IF 级联至 settle。

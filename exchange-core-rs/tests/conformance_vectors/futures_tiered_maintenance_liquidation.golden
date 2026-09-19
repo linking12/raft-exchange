@@ -11,6 +11,8 @@ A 2 2 1999400
 FEE 2 1200
 EVENTS
 FE CLOSE_POSITION uid=2 cur=2 free=1995824 locked=3576
+FE DEPOSIT uid=1 cur=2 free=6000 locked=0
+FE DEPOSIT uid=2 cur=2 free=2000000 locked=0
 FE LIQUIDATION_ALERT uid=1 cur=2 free=0 locked=0
 FE LIQUIDATION_CLOSE uid=1 cur=2 free=5400 locked=0
 FE LIQUIDATION_FEE uid=1 cur=2 free=3800 locked=0
@@ -23,3 +25,11 @@ FE PNL_SETTLEMENT uid=1 cur=2 free=3800 locked=0
 FE UNLOCK_PENDING uid=1 cur=2 free=6000 locked=0
 FE UNLOCK_PENDING uid=2 cur=2 free=1997000 locked=2600
 FE UNLOCK_PENDING uid=2 cur=2 free=2000000 locked=0
+MATCH
+ERF NEW NEW uid=1 oid=10001 side=BID maker=0 pos=ONEWAY cp=-1 px=10000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
+ERF NEW NEW uid=2 oid=10002 side=ASK maker=0 pos=ONEWAY cp=-1 px=10000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
+ERF TRADE FILLED uid=2 oid=10002 side=ASK maker=0 pos=ONEWAY cp=1 px=10000 lastQty=20 lastPx=10000 cumQty=20 cumQ=200000 avgPx=10000 fee=400
+ERF TRADE FILLED uid=1 oid=10001 side=BID maker=1 pos=ONEWAY cp=2 px=10000 lastQty=20 lastPx=10000 cumQty=20 cumQ=200000 avgPx=10000 fee=200
+ERF NEW NEW uid=2 oid=10003 side=BID maker=0 pos=ONEWAY cp=-1 px=9920 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
+ERF TRADE FILLED uid=1 oid=43379169886208 side=ASK maker=0 pos=ONEWAY cp=2 px=9920 lastQty=20 lastPx=9920 cumQty=20 cumQ=198400 avgPx=9920 fee=400
+ERF TRADE PARTIALLY_FILLED uid=2 oid=10003 side=BID maker=1 pos=ONEWAY cp=1 px=9920 lastQty=20 lastPx=9920 cumQty=20 cumQ=198400 avgPx=9920 fee=200
