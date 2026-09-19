@@ -35,14 +35,14 @@ FE UNLOCK_PENDING uid=2 cur=2 free=10000000 locked=0
 FE UNLOCK_PENDING uid=2 cur=2 free=9999800 locked=200
 FE UNLOCK_PENDING uid=2 cur=2 free=9999900 locked=100
 MATCH
-ERF NEW NEW uid=2 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
-ERF NEW NEW uid=1 oid=2 side=BID maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
-ERF TRADE FILLED uid=1 oid=2 side=BID maker=0 pos=ONEWAY cp=2 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0
-ERF TRADE FILLED uid=2 oid=1 side=ASK maker=1 pos=ONEWAY cp=1 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0
-ERF NEW NEW uid=2 oid=3 side=ASK maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
-ERF NEW NEW uid=1 oid=4 side=BID maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
-ERF TRADE FILLED uid=1 oid=4 side=BID maker=0 pos=ONEWAY cp=2 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0
-ERF TRADE FILLED uid=2 oid=3 side=ASK maker=1 pos=ONEWAY cp=1 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0
-ERF NEW NEW uid=2 oid=5 side=BID maker=0 pos=ONEWAY cp=-1 px=990 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0
-ERF TRADE FILLED uid=1 oid=43035572502528 side=ASK maker=0 pos=ONEWAY cp=2 px=567 lastQty=10 lastPx=990 cumQty=10 cumQ=9900 avgPx=990 fee=0
-ERF TRADE PARTIALLY_FILLED uid=2 oid=5 side=BID maker=1 pos=ONEWAY cp=1 px=990 lastQty=10 lastPx=990 cumQty=10 cumQ=9900 avgPx=990 fee=0
+ERF NEW NEW uid=2 oid=1 side=ASK maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2
+ERF NEW NEW uid=1 oid=2 side=BID maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2
+ERF TRADE FILLED uid=1 oid=2 side=BID maker=0 pos=ONEWAY cp=2 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0 feeAsset=2
+ERF TRADE FILLED uid=2 oid=1 side=ASK maker=1 pos=ONEWAY cp=1 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0 feeAsset=2
+ERF NEW NEW uid=2 oid=3 side=ASK maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2
+ERF NEW NEW uid=1 oid=4 side=BID maker=0 pos=ONEWAY cp=-1 px=1000 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2
+ERF TRADE FILLED uid=1 oid=4 side=BID maker=0 pos=ONEWAY cp=2 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0 feeAsset=2
+ERF TRADE FILLED uid=2 oid=3 side=ASK maker=1 pos=ONEWAY cp=1 px=1000 lastQty=10 lastPx=1000 cumQty=10 cumQ=10000 avgPx=1000 fee=0 feeAsset=2
+ERF NEW NEW uid=2 oid=5 side=BID maker=0 pos=ONEWAY cp=-1 px=990 lastQty=0 lastPx=0 cumQty=0 cumQ=0 avgPx=0 fee=0 feeAsset=2
+ERF TRADE FILLED uid=1 oid=43035572502528 side=ASK maker=0 pos=ONEWAY cp=2 px=567 lastQty=10 lastPx=990 cumQty=10 cumQ=9900 avgPx=990 fee=0 feeAsset=2
+ERF TRADE PARTIALLY_FILLED uid=2 oid=5 side=BID maker=1 pos=ONEWAY cp=1 px=990 lastQty=10 lastPx=990 cumQty=10 cumQ=9900 avgPx=990 fee=0 feeAsset=2

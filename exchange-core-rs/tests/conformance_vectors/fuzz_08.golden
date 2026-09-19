@@ -248,7 +248,6 @@ FE UNLOCKED uid=1 cur=2 free=999999960460 locked=0
 FE UNLOCKED uid=2 cur=1 free=1000000000 locked=0
 FE UNLOCKED uid=2 cur=1 free=999999990 locked=0
 FE UNLOCKED uid=2 cur=1 free=999999990 locked=0
-FE UNLOCKED uid=2 cur=1 free=999999990 locked=0
 FE UNLOCKED uid=2 cur=1 free=999999991 locked=0
 FE UNLOCKED uid=2 cur=1 free=999999997 locked=2
 FE UNLOCKED uid=3 cur=2 free=999999523651 locked=97433

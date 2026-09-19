@@ -288,10 +288,11 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 
 ### 7.9 逐事件对拍收尾(2026-09-19):Deposit/Withdraw、异步清算 ER/ERF 进 ③;修 Java reprice 分叉
 
-- **Deposit/Withdraw 进 ③**:深审确认两侧发射同源(仅 SUCCESS 时按 `price>0` 发 Deposit 否则 Withdraw),`fe_allowed` 加此二类,314 条 DEPOSIT 逐事件对拍。`fe_allowed` 现 24/27 类(仅剩 `Transfer`/`LoanCollateralChange`/`ResetFee` 未进,Transfer 由 ① 覆盖)。
+- **Deposit/Withdraw 进 ③**:深审确认两侧发射同源(仅 SUCCESS 时按 `price>0` 发 Deposit 否则 Withdraw),`fe_allowed` 加此二类。
 - **异步清算/ADL 的 ER/ERF 进 ③**:给 8 个 events-on 清算/ADL 向量(`liquidation_isolated`/`adl`/`adl_multi_counterparty`/`liquidation_cross_multi_symbol`/`futures_if_takeover`/`hedge_liquidation_one_leg`/`liquidation_force_if_adl_cascade`/`futures_tiered_maintenance_liquidation`)加 `#!match=on`。验证:FORCE/ADL/IF 强平执行报告的 ER/ERF **顺序两侧确定一致**(如 FORCE 单 `ERF TRADE FILLED oid=<liq id>`);共 14 个 `#!match=on` 向量。exporter 捕获竞态由隔离生成 + 自愈循环规避。
 - **修 Java reprice 分叉(§5 raft 重启 loan 分叉根因)**:`GroupingProcessor` 让 `REPRICE_LOAN_RATES` **独占 group**(组首+组尾各断一次边界,`repriceExclusiveGroup`),保证其 R2 利率写在下条 loan 命令 R1 读前冲完,不再随 live/replay 分组漂移而分叉。**Java 引擎 bug,Rust 顺序管线天然正确**;顺带关闭潜在 Java-Rust 平价差(Java 现也恒读 post-reprice)。Java loan ITs(17)+ ConservationFuzz(8)绿。见 [[reprice-r2-r1-ordering-hazard]]。
-- 最终全绿:lib **993** / conformance **89 向量**(14 个 `#!match=on`) / e2e 36 / integration 357 / base_parity 78 / diff 9。
+- **补齐全部 27 类 FundEventType + 命令覆盖 + ER/ERF fee 字段**(遗漏审计后):`fe_allowed`/Java `ALLOWED` 加最后 3 类 `Transfer`/`LoanCollateralChange`/`ResetFee` → **27/27 全类逐事件对拍**(1472 TRANSFER、314 DEPOSIT 等)。新增 DSL verb(两侧)+ 向量补命令覆盖:`WITHDRAW`(`withdraw_deposit` 负向 BAL)、`RESET_FEE`(`reset_fee` 扫费)、`CLOSE`(`futures_close_position`)、`LEVERAGE`(`leverage_adjust`)、`REPRICE`、`LOAN_ADD_COLLATERAL`/`LOAN_RELEASE_COLLATERAL`(`loan_isolated_collateral`)、`POOL_WITHDRAW`/`IF_WITHDRAW`/`LIF_WITHDRAW`(`pool_if_withdraw`)。ER/ERF 行加 `commAsset`/`feeAsset`(fee 币种路由,money 相关)逐字段对拍。
+- 最终全绿:lib **993** / conformance **95 向量**(14 个 `#!match=on`,27/27 FundEventType) / e2e 36 / integration 357 / base_parity 78 / diff 9。
 
 ---
 
