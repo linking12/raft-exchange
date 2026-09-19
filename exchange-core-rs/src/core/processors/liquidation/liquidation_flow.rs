@@ -3,7 +3,6 @@ pub struct LiquidationFlow {
     pub state: LiquidationState,
     pub bankruptcy_price: i64,
     pub size: i64,
-
     pub original_order_id: i64,
 }
 

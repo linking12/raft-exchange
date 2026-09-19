@@ -1,8 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdlUserPosition {
-
     pub uid: i64,
-
     pub volume: i64,
 }
 

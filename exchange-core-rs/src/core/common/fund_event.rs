@@ -73,66 +73,42 @@ impl FundEventType {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FundEvent {
     pub event_type: FundEventType,
-
     pub order_id: i64,
-
     pub uid: i64,
-
     pub currency: i32,
-
     pub currency_scale_k: i64,
-
     pub free: i64,
-
     pub locked: i64,
-
     pub symbol: i32,
-
     pub base_scale_k: i64,
-
     pub quote_scale_k: i64,
     pub direction: PositionDirection,
     pub open_volume: i64,
     pub open_init_margin_sum: i64,
-
     pub open_price_sum: i64,
-
     pub profit: i64,
     pub leverage: i32,
     pub margin_mode: MarginMode,
-
     pub extra_margin: i64,
     pub unrealized_profit: i64,
     pub liquidation_price: i64,
-
     pub margin_ratio_scale_k: i64,
-
     pub maintenance_margin_scale_k: i64,
     pub mark_price: i64,
     pub pending_buy_size: i64,
     pub pending_buy_avg_price: i64,
     pub pending_sell_size: i64,
     pub pending_sell_avg_price: i64,
-
     pub loan_mode: i8,
-
     pub loan_debt_principal: i64,
-
     pub loan_debt_interest: i64,
-
     pub loan_interest_paid_total: i64,
-
     pub loan_ltv_bps: i64,
-
     pub loan_threshold_bps: i64,
-
     pub loan_collateral_currency: i32,
-
     pub loan_collateral_currency_scale_k: i64,
-
     pub loan_collateral_pledged: i64,
     pub loan_collateral_free: i64,
-
     pub loan_collateral_locked: i64,
 }
 

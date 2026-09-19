@@ -1,11 +1,8 @@
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CoreCurrencySpecification {
-
     pub currency: i32,
     pub name: String,
-
     pub currency_scale_k: i64,
-
     pub collateral_weight_bps: i32,
 }
 

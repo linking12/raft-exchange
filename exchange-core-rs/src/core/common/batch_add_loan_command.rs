@@ -9,19 +9,12 @@ pub struct BatchAddLoanCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlobalLoanConfig {
-
     pub numeraire_currency: i32,
-
     pub cross_liquidation_ltv_bps: i32,
-
     pub cross_margin_call_ltv_bps: i32,
-
     pub loan_pool_utilization_cap_bps: i32,
-
     pub loan_liquidation_fee_bps: i32,
-
     pub ltv_liquidation_buffer_bps: i32,
-
     pub ltv_margin_call_buffer_bps: i32,
 }
 
@@ -59,16 +52,11 @@ pub const UNSET_AMOUNT: i64 = -1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SymbolLoanConfig {
     pub symbol_id: i32,
-
     pub loan_initial_ltv_bps: i32,
     pub loan_liquidation_ltv_bps: i32,
-
     pub loan_margin_call_ltv_bps: i32,
-
     pub loan_max_amount: i64,
-
     pub loan_max_term_days: i32,
-
     pub collateral_weight_bps: i32,
 }
 
@@ -131,15 +119,10 @@ fn thresholds_valid(initial: i32, margin_call: i32, liquidation: i32) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateCurveConfig {
-
     pub base_bps: i32,
-
     pub kink_util_bps: i32,
-
     pub slope1_bps: i32,
-
     pub slope2_bps: i32,
-
     pub locked_rate_adjust_bps: i32,
 }
 

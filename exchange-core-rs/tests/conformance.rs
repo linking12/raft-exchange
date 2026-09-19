@@ -416,6 +416,13 @@ fn replay(stream: &str) -> (ExchangeApi, Vec<String>, Vec<String>, Vec<String>) 
                 order_id: opt_i64(&kv, "txid", 0),
                 ..Default::default()
             })),
+            "TRANSFER" => Some(api.internal_transfer(
+                i64_of(&kv, "from"),
+                i64_of(&kv, "to"),
+                i32_of(&kv, "cur"),
+                i64_of(&kv, "amount"),
+                opt_i64(&kv, "txid", 0),
+            )),
             other => panic!("unsupported command verb: {other}"),
         };
         if let Some(rc) = rc {

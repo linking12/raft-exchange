@@ -18,6 +18,7 @@ import exchange.core2.core.common.api.ApiAdjustPositionMode;
 import exchange.core2.core.common.api.ApiAdjustUserBalance;
 import exchange.core2.core.common.api.ApiCancelOrder;
 import exchange.core2.core.common.api.ApiInsuranceFundDeposit;
+import exchange.core2.core.common.api.ApiInternalTransfer;
 import exchange.core2.core.common.api.ApiMoveOrder;
 import exchange.core2.core.common.api.ApiLoanCreate;
 import exchange.core2.core.common.api.ApiLoanCrossAddCollateral;
@@ -364,6 +365,11 @@ public class ConformanceExporter {
                         rc = api.submitCommandAsync(ApiLoanIfDeposit.builder()
                                 .shardId(0).currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
                         rc = null; // 与 Rust 对齐:LIF_DEPOSIT 运维 setup,不入 R
+                        break;
+                    case "TRANSFER":
+                        rc = api.submitCommandAsync(ApiInternalTransfer.builder()
+                                .transactionId(pl(kv, "txid", seq)).fromUid(pl(kv, "from")).toUid(pl(kv, "to"))
+                                .currency(pi(kv, "cur")).amount(pl(kv, "amount")).build()).join();
                         break;
                     default:
                         throw new IllegalArgumentException("未支持 verb: " + verb);
