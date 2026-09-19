@@ -591,6 +591,7 @@ mod tests {
                 (UID_2, FundEventType::Deposit, BASE_ID, 10, 0),
                 (UID_1, FundEventType::Locked, QUOTE_ID, 1_000 - bid_lock, bid_lock),
                 (UID_2, FundEventType::Locked, BASE_ID, 5, 5),
+                (UID_1, FundEventType::Unlocked, QUOTE_ID, 495, 0),
                 (UID_1, FundEventType::Transfer, QUOTE_ID, 495, 0),
                 (UID_1, FundEventType::Transfer, BASE_ID, 5, 0),
                 (UID_2, FundEventType::Transfer, QUOTE_ID, 490, 0),
@@ -620,6 +621,7 @@ mod tests {
                 (UID_2, FundEventType::Locked, QUOTE_ID, 1_000 - bid_lock, bid_lock),
                 (UID_1, FundEventType::Transfer, QUOTE_ID, 495, 0),
                 (UID_1, FundEventType::Transfer, BASE_ID, 5, 0),
+                (UID_2, FundEventType::Unlocked, QUOTE_ID, 490, 0),
                 (UID_2, FundEventType::Transfer, QUOTE_ID, 490, 0),
                 (UID_2, FundEventType::Transfer, BASE_ID, 5, 0),
             ]

@@ -419,20 +419,20 @@ impl RiskEngine {
             };
 
         if let Some(remaining) = next {
+            let base_currency_spec = ssp
+                .get_currency(spec.base_currency)
+                .unwrap_or_else(|| {
+                    panic!("currency spec missing for currency {}", spec.base_currency)
+                })
+                .clone();
+            let quote_currency_spec = ssp
+                .get_currency(spec.quote_currency)
+                .unwrap_or_else(|| {
+                    panic!("currency spec missing for currency {}", spec.quote_currency)
+                })
+                .clone();
+            let mut spot_events = Vec::new();
             if taker_sell {
-                let base_currency_spec = ssp
-                    .get_currency(spec.base_currency)
-                    .unwrap_or_else(|| {
-                        panic!("currency spec missing for currency {}", spec.base_currency)
-                    })
-                    .clone();
-                let quote_currency_spec = ssp
-                    .get_currency(spec.quote_currency)
-                    .unwrap_or_else(|| {
-                        panic!("currency spec missing for currency {}", spec.quote_currency)
-                    })
-                    .clone();
-                let mut spot_events = Vec::new();
                 Self::handle_matcher_events_exchange_sell(
                     cmd,
                     remaining,
@@ -444,21 +444,7 @@ impl RiskEngine {
                     &mut spot_events,
                     ssp,
                 );
-                cmd.fund_events.append(&mut spot_events);
             } else {
-                let base_currency_spec = ssp
-                    .get_currency(spec.base_currency)
-                    .unwrap_or_else(|| {
-                        panic!("currency spec missing for currency {}", spec.base_currency)
-                    })
-                    .clone();
-                let quote_currency_spec = ssp
-                    .get_currency(spec.quote_currency)
-                    .unwrap_or_else(|| {
-                        panic!("currency spec missing for currency {}", spec.quote_currency)
-                    })
-                    .clone();
-                let mut spot_events = Vec::new();
                 Self::handle_matcher_events_exchange_buy(
                     cmd,
                     remaining,
@@ -470,8 +456,8 @@ impl RiskEngine {
                     &mut spot_events,
                     ssp,
                 );
-                cmd.fund_events.append(&mut spot_events);
             }
+            cmd.fund_events.append(&mut spot_events);
         }
 
         if is_loan_force_liquidate {
@@ -1111,8 +1097,10 @@ impl RiskEngine {
 
         taker_up.add_to_locked(currency, -release);
 
-        if let Some(cspec) = ssp.get_currency(currency) {
-            fund_events.push(Self::spot_snapshot_event(FundEventType::Unlocked, cmd.order_id, taker_up, currency, ssp, cspec, spec.symbol_id));
+        if release > 0 {
+            if let Some(cspec) = ssp.get_currency(currency) {
+                fund_events.push(Self::spot_snapshot_event(FundEventType::Unlocked, cmd.order_id, taker_up, currency, ssp, cspec, spec.symbol_id));
+            }
         }
     }
 
@@ -1200,6 +1188,9 @@ impl RiskEngine {
                 );
                 maker_up.add_to_account(base_currency, base_gained);
 
+                if quote_refund > 0 {
+                    fund_events.push(Self::spot_snapshot_event(FundEventType::Unlocked, ev.maker_order_id, maker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
+                }
                 fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, ev.maker_order_id, maker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
                 fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, ev.maker_order_id, maker_up, base_currency, ssp, base_currency_spec, spec.symbol_id));
             }
@@ -1415,6 +1406,9 @@ impl RiskEngine {
             );
             taker_up.add_to_account(base_currency, to_be_added);
 
+            if quote_refund > 0 {
+                fund_events.push(Self::spot_snapshot_event(FundEventType::Unlocked, cmd.order_id, taker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
+            }
             fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, cmd.order_id, taker_up, quote_currency, ssp, quote_currency_spec, spec.symbol_id));
             fund_events.push(Self::spot_snapshot_event(FundEventType::Transfer, cmd.order_id, taker_up, base_currency, ssp, base_currency_spec, spec.symbol_id));
         }

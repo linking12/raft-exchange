@@ -150,6 +150,10 @@ fn fe_allowed(t: FundEventType) -> bool {
             | LoanMarginCall
             | OpenPosition
             | ClosePosition
+            | Locked
+            | Unlocked
+            | LockPending
+            | UnlockPending
     )
 }
 

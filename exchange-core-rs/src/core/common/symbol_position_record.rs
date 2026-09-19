@@ -35,7 +35,6 @@ impl SymbolPositionRecord {
         let mut r = SymbolPositionRecord { uid, symbol, currency, margin_mode, ..Default::default() };
         r.update_leverage(leverage);
         r.adl_eligibility = if margin_mode == MarginMode::Isolated { 100 } else { 0 };
-        r.pending_adl_size = 0;
         r
     }
 

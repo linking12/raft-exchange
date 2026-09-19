@@ -691,30 +691,33 @@ fn characterization_naive_formula_misses_fresh_counterparty_unrealized_pnl() {
 
 #[derive(Debug, Clone)]
 enum FutGenCmd {
-    PlaceOpen { uid_idx: usize, is_bid: bool, price: i64, size: i64 },
+    PlaceOpen { uid_idx: usize, is_bid: bool, price: i64, size: i64, is_cross: bool },
     ClosePosition { uid_idx: usize, price: i64, size: i64 },
-    MarginAdd { uid_idx: usize, amount: i64 },
+    MarginAdd { uid_idx: usize, amount: i64, is_cross: bool },
     SetMarkPrice { price: i64 },
     SettleFunding { is_ask: bool, rate: i64 },
 }
 
 fn gen_fut_cmd(n_users: usize) -> impl Strategy<Value = FutGenCmd> {
-    let place = (0..n_users, any::<bool>(), 50i64..=200, 1i64..=50)
-        .prop_map(|(uid_idx, is_bid, price, size)| FutGenCmd::PlaceOpen { uid_idx, is_bid, price, size });
+    let place = (0..n_users, any::<bool>(), 50i64..=200, 1i64..=50, any::<bool>())
+        .prop_map(|(uid_idx, is_bid, price, size, is_cross)| FutGenCmd::PlaceOpen { uid_idx, is_bid, price, size, is_cross });
     let close = (0..n_users, 50i64..=200, 1i64..=50)
         .prop_map(|(uid_idx, price, size)| FutGenCmd::ClosePosition { uid_idx, price, size });
-    let margin_add = (0..n_users, 1i64..=5_000).prop_map(|(uid_idx, amount)| FutGenCmd::MarginAdd { uid_idx, amount });
+    let margin_add = (0..n_users, 1i64..=5_000, any::<bool>())
+        .prop_map(|(uid_idx, amount, is_cross)| FutGenCmd::MarginAdd { uid_idx, amount, is_cross });
     let mark = (50i64..=200).prop_map(|price| FutGenCmd::SetMarkPrice { price });
     let funding = (any::<bool>(), 1i64..=1_000).prop_map(|(is_ask, rate)| FutGenCmd::SettleFunding { is_ask, rate });
     prop_oneof![5 => place, 3 => close, 1 => margin_add, 1 => mark, 1 => funding]
 }
 
-fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<i64>, Vec<FutGenCmd>)> {
+#[allow(clippy::type_complexity)]
+fn fut_scenario_strategy() -> impl Strategy<Value = (bool, usize, Vec<i32>, Vec<i64>, Vec<bool>, Vec<FutGenCmd>)> {
     (any::<bool>(), 2usize..=4).prop_flat_map(|(fixed_fee, n_users)| {
         let leverages = prop::collection::vec(1i32..=5, n_users);
         let balances = prop::collection::vec(1_000_000i64..=100_000_000i64, n_users);
+        let hedge_modes = prop::collection::vec(any::<bool>(), n_users);
         let cmds = prop::collection::vec(gen_fut_cmd(n_users), 10..80);
-        (Just(fixed_fee), Just(n_users), leverages, balances, cmds)
+        (Just(fixed_fee), Just(n_users), leverages, balances, hedge_modes, cmds)
     })
 }
 
@@ -723,7 +726,7 @@ proptest! {
 
     #[test]
     fn conservation_holds_for_random_futures_command_stream(
-        (fixed_fee, n_users, leverages, balances, cmds) in fut_scenario_strategy()
+        (fixed_fee, n_users, leverages, balances, hedge_modes, cmds) in fut_scenario_strategy()
     ) {
         let spec = if fixed_fee {
             futures_spec_fixed_fee(10, 5)
@@ -743,6 +746,9 @@ proptest! {
                 api.balance_adjustment(uid, QUOTE, balances[i], (i as i64) + 1),
                 CommandResultCode::Success
             );
+            if hedge_modes[i] {
+                prop_assert_eq!(api.adjust_position_mode(uid, true), CommandResultCode::Success);
+            }
             assert_futures_invariants(&api);
         }
 
@@ -753,7 +759,7 @@ proptest! {
 
         for cmd in &cmds {
             match cmd {
-                FutGenCmd::PlaceOpen { uid_idx, is_bid, price, size } => {
+                FutGenCmd::PlaceOpen { uid_idx, is_bid, price, size, is_cross } => {
                     let uid = uids[*uid_idx];
                     let action = if *is_bid { OrderAction::Bid } else { OrderAction::Ask };
                     let order_id = next_order_id;
@@ -767,7 +773,7 @@ proptest! {
                         action,
                         order_type: OrderType::Gtc,
                         leverage: leverages[*uid_idx],
-                        margin_mode: MarginMode::Isolated,
+                        margin_mode: if *is_cross { MarginMode::Cross } else { MarginMode::Isolated },
                         reduce_only: false,
                     });
                 }
@@ -790,7 +796,7 @@ proptest! {
                         order_type: OrderType::Gtc,
                     });
                 }
-                FutGenCmd::MarginAdd { uid_idx, amount } => {
+                FutGenCmd::MarginAdd { uid_idx, amount, is_cross } => {
                     let uid = uids[*uid_idx];
                     let order_id = next_order_id;
                     next_order_id += 1;
@@ -799,7 +805,7 @@ proptest! {
                         symbol: FUT_SYMBOL,
                         action: OrderAction::Bid,
                         amount: *amount,
-                        margin_mode: MarginMode::Isolated,
+                        margin_mode: if *is_cross { MarginMode::Cross } else { MarginMode::Isolated },
                         order_id,
                     });
                 }
