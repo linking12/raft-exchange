@@ -188,8 +188,7 @@ mod tests {
 
     #[test]
     fn should_init_symbols() {
-        // smoke test: registering the basic symbols succeeds (mirrors shouldInitSymbols).
-        // setup()/setup_exchange() assert add_symbol == Success internally.
+
         let _spot = setup();
         let mut ex = setup_exchange();
         let l2 = ex.request_l2(SYMBOL_EX, 10);
@@ -199,7 +198,7 @@ mod tests {
 
     #[test]
     fn should_init_users() {
-        // smoke test: users are registered with their initial balances (mirrors shouldInitUsers).
+
         let api = setup();
         assert_eq!(api.ups().get(UID_1).unwrap().account(BASE), 1_000_000);
         assert_eq!(api.ups().get(UID_1).unwrap().account(QUOTE), 100_000_000);

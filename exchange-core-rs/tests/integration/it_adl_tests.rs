@@ -45,11 +45,8 @@ mod tests {
 
     fn setup() -> (ExchangeApi, std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>) {
         let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let sink = collector.clone();
         let mut api = ExchangeApi::new();
-        api.core().with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
-            sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
-        }));
+        api.core().with_results_consumer(Box::new(crate::common::FundEventCollector(collector.clone())));
         api.add_currency(BASE_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_futures_symbol(adl_spec()), CommandResultCode::Success);
@@ -211,10 +208,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Translation of ITExchangeCoreADL.adlOriginConsumedMidCascadeConservation:
-    // a specific FORCE->IF->ADL cascade where the origin position is consumed mid-cascade; regression
-    // guard that a stale liquidation cmd.size does not over-close the counterparty and break global
-    // conservation. Terminal positions are pinned field-by-field against the Java oracle.
     #[test]
     fn adl_origin_consumed_mid_cascade_conservation() {
         const FUT: i32 = 5001;
@@ -246,7 +239,6 @@ mod tests {
             seed_user(&mut api, uid, 1_000_000, (i + 1) as i64);
         }
 
-        // liquidation is enabled from the start; each mark change drives the cascade synchronously
         api.enable_liquidation();
 
         let place_iso = |api: &mut ExchangeApi, order_id: i64, uid: i64, price: i64, size: i64, bid: bool| {
@@ -284,7 +276,6 @@ mod tests {
         assert_eq!(api.set_mark_price(FUT, 60), CommandResultCode::Success);
         assert_eq!(place_iso(&mut api, oid, u2, 80, 14, false), CommandResultCode::Success);
 
-        // pre-cascade positions must match the Java oracle field-by-field
         let check = |api: &ExchangeApi, uid: i64, dir: PositionDirection, vol: i64, price_sum: i64| {
             let p = api.user_position(uid, FUT).unwrap();
             assert_eq!(p.direction, dir, "uid{uid} direction");
@@ -296,7 +287,6 @@ mod tests {
         check(&api, u3, PositionDirection::Long, 6, 506);
         check(&api, u4, PositionDirection::Short, 9, 808);
 
-        // final mark triggers the FORCE->IF->ADL cascade
         assert_eq!(api.set_mark_price(FUT, 92), CommandResultCode::Success);
 
         let tcb = api.total_balance();

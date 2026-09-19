@@ -181,6 +181,8 @@ Rust 侧完全确定(单管线同步)。Java 侧的异步部分靠上面的稳�
 | **撮合明细事件(高层报告)** | `SpotExecutionReport`/`FuturesExecutionReport` | 经 `SimpleEventsProcessor` 产出同型报告 | **同步向量已进 ③**(`#!match=on` 的 `MATCH` 段,`ER`/`ERF` 逐字段);异步清算向量仍只靠 ① |
 | **执行报告 exec-id / trade-id** | `seq` 由 disruptor 定(R2 `-seq` + 主 `+seq` 双发) | `results_seq` 单发递增 | `ER`/`ERF` **剔除** `tid`/`eid`(seq 口径刻意不同);taker==maker 共享 id 的不变式由 ① + `simple_events_processor` 单测覆盖 |
 | **MOVE 成交后 mover 的 `filledNotional`** | ~~不累计~~ **已修**:`moveOrder` 补 `filledNotional` 累计(§7.6) | 两者都累计(自洽) | 两侧一致;`spot_cancel_reduce_move`(MOVE 成交后 cancel 看 cumQ)对拍作回归护栏,`spot_cancel_after_fill` 对拍正常成交路径 |
+| **`LIQUIDATION_FEE` 事件的 `profit` 字段** | 结算前快照 `position.profit`(如 -300) | 平仓结算已把 profit 归零,fee 事件 `profit=0` | 冗余字段:已实现 PnL 已在 `LIQUIDATION_CLOSE.profit` + `PNL_SETTLEMENT` + 账户体现,fee 事件的 profit 快照不额外比对(`it_mixed` 两个 `*_fully_matched_with_fee` 断言 fee.profit=0) |
+| **`symbol_to_users` 强平索引维护** | 平仓时 eager 摘除(`RiskEngine.removePositionRecord` → `onPositionClosed`) | lazy 清理:下一次针对该 symbol 的 `check_positions` 用 `retain()` 剔除无仓持有人(`on_position_closed` 未接进平仓路径) | 内部性能索引(选扫描候选),非可观测资金/行为态;无仓 uid 两侧都不会被强平,清算结果一致(`it_liquidation` symbol_index 测试验 lazy 模型) |
 | **`state_hash`** | Java 自己的 hash | 逐字段折叠、是超集 | 不互比;跨实现用 ③ 的语义状态摘要 |
 | **现货普通 FOK(`OrderType.FOK`)** | **未实现**(`// TODO FOK support`,整单 reject) | 已实现 fill-or-kill | Rust 更完整;差分模糊不随机普通 FOK(`fok_kill` 手写覆盖)。**`FOK_BUDGET`/`IOC_BUDGET` 两侧都实现、已对拍一致** |
 | **批处理 R1/R2 时序** | 未成交 IOC ASK 的 R2 锁释放滞后于下条 R1(须 barrier,否则 spurious NSF) | 单管线 R2 恒先于下条 R1 | exporter 每命令 flush,比 settled 语义 |

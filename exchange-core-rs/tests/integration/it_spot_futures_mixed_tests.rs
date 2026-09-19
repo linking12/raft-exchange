@@ -495,18 +495,11 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // ------------------------------------------------------------------
-    // Fund-event capture helpers
-    // ------------------------------------------------------------------
-
     fn setup_spot_with_collector() -> (ExchangeApi, std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>>) {
         let collector: std::rc::Rc<std::cell::RefCell<Vec<FundEvent>>> =
             std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let sink = collector.clone();
         let mut api = ExchangeApi::new();
-        api.core().with_results_consumer(Box::new(move |cmd, _seq, _ssp, _ups| {
-            sink.borrow_mut().extend(cmd.fund_events.iter().cloned());
-        }));
+        api.core().with_results_consumer(Box::new(crate::common::FundEventCollector(collector.clone())));
         api.add_currency(BASE_ID, 1);
         api.add_currency(QUOTE_ID, 1);
         assert_eq!(api.add_symbol(spot_spec()), CommandResultCode::Success);
@@ -517,9 +510,6 @@ mod tests {
         (e.uid, e.event_type, e.currency, e.free, e.locked)
     }
 
-    // Test 1 (ITSpotFuturesMixedIntegration.testSpotLockSurvivesLiquidation):
-    // spot exchangeLocked lowers effective balance, causing the futures position to be liquidated;
-    // the spot lock itself must be untouched by the liquidation.
     #[test]
     fn spot_lock_survives_liquidation() {
         let mut api = ExchangeApi::new();
@@ -532,7 +522,6 @@ mod tests {
         fund(&mut api, UID_1, QUOTE_ID, 400, 1);
         fund(&mut api, UID_2, QUOTE_ID, 100_000, 2);
 
-        // UID_1 opens CROSS LONG 10@1000 (maker fee = 10*10 = 100 -> accounts = 300)
         assert_eq!(
             api.place_futures_order(cross_futures(10001, UID_1, PERP_SYMBOL, 1_000, 10, OrderAction::Bid)),
             CommandResultCode::Success
@@ -543,18 +532,15 @@ mod tests {
         );
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 300, "UID_1 accounts = 400 - makerFee(100)");
 
-        // spot BID 1@100 -> lock = 1*(100+2) = 102
         let spot_lock = 100 + SPOT_TAKER_FEE;
         assert_eq!(api.place_order(spot_bid(10003, UID_1, 100, 100, 1)), CommandResultCode::Success);
         assert_eq!(api.user_locked(UID_1, QUOTE_ID), spot_lock, "spot exchangeLocked=102");
 
-        // liquidity for the forced sell: UID_2 BID 10@1001 (bankruptcy price)
         assert_eq!(
             api.place_futures_order(cross_futures(10004, UID_2, PERP_SYMBOL, 1_001, 10, OrderAction::Bid)),
             CommandResultCode::Success
         );
 
-        // drop mark price to 984: with the spot lock the position is under water and is liquidated
         api.enable_liquidation();
         assert_eq!(api.set_mark_price(PERP_SYMBOL, 984), CommandResultCode::Success);
 
@@ -563,7 +549,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Test 13 (testFundEventBidLockUnlock): LOCKED / UNLOCKED fund-event field accuracy for a spot BID.
     #[test]
     fn fund_event_bid_lock_unlock() {
         let (mut api, events) = setup_spot_with_collector();
@@ -588,7 +573,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Test 14 (testFundEventSpotFillTransfers): TRANSFER field accuracy on a spot fill, ASK taker.
     #[test]
     fn fund_event_spot_fill_transfers() {
         let (mut api, events) = setup_spot_with_collector();
@@ -599,14 +583,6 @@ mod tests {
         assert_eq!(api.place_order(spot_bid(140001, UID_1, 100, 100, 5)), CommandResultCode::Success);
         assert_eq!(api.place_order(spot_ask(140002, UID_2, 100, 5)), CommandResultCode::Success);
 
-        // Every balance snapshot (free/locked) matches Java exactly. Two structural differences
-        // versus the Java assertion come from single-shard-sync vs multi-shard-async event flush and
-        // are documented as POSSIBLE ENGINE DIFFERENCES:
-        //   (1) Rust emits the resting/maker side (UID_1) transfers BEFORE the aggressor/taker side
-        //       (UID_2); Java emits taker-first.
-        //   (2) Java emits a separate maker UNLOCKED(495,0) refund event before the maker QUOTE
-        //       transfer; Rust folds that fee-difference refund into the transfer (free=495),
-        //       so Rust produces 8 events, Java 9.
         let got: Vec<_> = events.borrow().iter().map(snap).collect();
         assert_eq!(
             got,
@@ -624,7 +600,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Test 14b (testFundEventSpotFillTransfersBidTaker): spot fill with BID taker (aggressive buyer).
     #[test]
     fn fund_event_spot_fill_transfers_bid_taker() {
         let (mut api, events) = setup_spot_with_collector();
@@ -635,12 +610,6 @@ mod tests {
         assert_eq!(api.place_order(spot_ask(160001, UID_1, 100, 5)), CommandResultCode::Success);
         assert_eq!(api.place_order(spot_bid(160002, UID_2, 110, 110, 5)), CommandResultCode::Success);
 
-        // Same single-shard vs multi-shard structural deltas as fund_event_spot_fill_transfers
-        // (POSSIBLE ENGINE DIFFERENCES; all free/locked values match Java):
-        //   (1) Rust emits the resting/maker side (UID_1) transfers before the taker side (UID_2);
-        //       Java emits taker-first.
-        //   (2) Java emits a separate taker UNLOCKED(490,0) principal-difference refund event; Rust
-        //       folds it into the taker QUOTE transfer (free=490), so Rust has 8 events, Java 9.
         let got: Vec<_> = events.borrow().iter().map(snap).collect();
         assert_eq!(
             got,
@@ -658,7 +627,6 @@ mod tests {
         assert_conserved(&api);
     }
 
-    // Test 15 (testFundEventDepositWithdrawReflectLock): deposit/withdraw events reflect the spot lock.
     #[test]
     fn fund_event_deposit_withdraw_reflect_lock() {
         let (mut api, events) = setup_spot_with_collector();

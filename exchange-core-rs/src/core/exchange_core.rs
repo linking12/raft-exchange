@@ -7,6 +7,8 @@ use crate::core::processors::user_profile_service::UserProfileService;
 use crate::core::common::last_price_cache_record::LastPriceCacheRecord;
 use crate::core::common::cmd::order_command::OrderCommand;
 use crate::core::common::margin_mode::MarginMode;
+use crate::core::processors::liquidation::command_submitter::{CommandSubmitter, VecCommandSink};
+use crate::core::simple_events_processor::{NoopEventsHandler, SimpleEventsProcessor};
 use crate::core::processors::liquidation::scheduler::LiquidationScheduler;
 use crate::core::processors::matching_engine_router::MatchingEngineRouter;
 use crate::core::processors::risk_engine::RiskEngine;
@@ -14,7 +16,15 @@ use crate::core::snapshot::serialization_processor::{
     InMemorySerializationProcessor, SerializationProcessor, SerializedModuleType,
 };
 
-type ResultsConsumer = Box<dyn FnMut(&OrderCommand, i64, &SymbolSpecificationProvider, &UserProfileService)>;
+pub trait ResultsConsumer {
+    fn consume(&mut self, cmd: &OrderCommand, seq: i64, ssp: &SymbolSpecificationProvider, ups: &UserProfileService);
+}
+
+impl<C: ResultsConsumer + ?Sized> ResultsConsumer for Rc<RefCell<C>> {
+    fn consume(&mut self, cmd: &OrderCommand, seq: i64, ssp: &SymbolSpecificationProvider, ups: &UserProfileService) {
+        self.borrow_mut().consume(cmd, seq, ssp, ups);
+    }
+}
 
 pub struct ExchangeCore {
     pub risk: RiskEngine,
@@ -23,7 +33,7 @@ pub struct ExchangeCore {
     pub ssp: SymbolSpecificationProvider,
     pending_commands: Rc<RefCell<Vec<OrderCommand>>>,
     ser_proc: Box<dyn SerializationProcessor>,
-    results_consumer: Option<ResultsConsumer>,
+    results_consumer: Option<Box<dyn ResultsConsumer>>,
     results_seq: i64,
     liquidation_scheduler: LiquidationScheduler,
 }
@@ -44,16 +54,13 @@ impl ExchangeCore {
             ssp: SymbolSpecificationProvider::new(),
             pending_commands: Rc::new(RefCell::new(Vec::new())),
             ser_proc: Box::new(InMemorySerializationProcessor::new()),
-            results_consumer: None,
+            results_consumer: Some(Box::new(SimpleEventsProcessor::new(NoopEventsHandler, NoopEventsHandler))),
             results_seq: 0,
             liquidation_scheduler: LiquidationScheduler::new(10, 30, 0),
         };
 
-        let pending = core.pending_commands.clone();
-        core.with_command_submitter(move || {
-            let sink = pending.clone();
-            Box::new(move |cmd| sink.borrow_mut().push(cmd))
-        });
+        let submitter = Rc::new(RefCell::new(VecCommandSink(core.pending_commands.clone())));
+        core.with_command_submitter(submitter);
         core
     }
 
@@ -61,15 +68,12 @@ impl ExchangeCore {
         self.ser_proc = ser_proc;
     }
 
-    pub fn with_command_submitter<F>(&mut self, make: F)
-    where
-        F: Fn() -> Box<dyn FnMut(OrderCommand)>,
-    {
-        self.liquidation_scheduler.set_command_submitter(make());
-        self.risk.liquidation_engine.set_command_submitter(make);
+    pub fn with_command_submitter(&mut self, submitter: Rc<RefCell<dyn CommandSubmitter>>) {
+        self.liquidation_scheduler.set_command_submitter(submitter.clone());
+        self.risk.liquidation_engine.set_command_submitter(submitter);
     }
 
-    pub fn with_results_consumer(&mut self, consumer: ResultsConsumer) {
+    pub fn with_results_consumer(&mut self, consumer: Box<dyn ResultsConsumer>) {
         self.results_consumer = Some(consumer);
     }
 
@@ -115,7 +119,7 @@ impl ExchangeCore {
         let seq = self.results_seq;
         self.results_seq += 1;
         if let Some(h) = self.results_consumer.as_mut() {
-            h(cmd, seq, &self.ssp, &self.ups);
+            h.consume(cmd, seq, &self.ssp, &self.ups);
         }
     }
 
@@ -909,11 +913,9 @@ mod liquidation_engine_e2e_tests {
         core.process_command(&mut m2);
 
         let captured: Rc<RefCell<Vec<OrderCommand>>> = Rc::new(RefCell::new(Vec::new()));
-        let cap = captured.clone();
-        core.with_command_submitter(move || {
-            let sink = cap.clone();
-            Box::new(move |cmd| sink.borrow_mut().push(cmd))
-        });
+        core.with_command_submitter(Rc::new(RefCell::new(
+            crate::core::processors::liquidation::command_submitter::VecCommandSink(captured.clone()),
+        )));
 
         core.process_command(&mut markprice(94, 2_000));
 
@@ -943,12 +945,14 @@ mod liquidation_engine_e2e_tests {
         core.process_command(&mut m2);
         let before = conserved(&core);
 
+        struct RaftQueueSubmitter(Rc<RefCell<VecDeque<OrderCommand>>>);
+        impl crate::core::processors::liquidation::command_submitter::CommandSubmitter for RaftQueueSubmitter {
+            fn submit(&mut self, cmd: OrderCommand) {
+                self.0.borrow_mut().push_back(cmd);
+            }
+        }
         let queue: Rc<RefCell<VecDeque<OrderCommand>>> = Rc::new(RefCell::new(VecDeque::new()));
-        let q = queue.clone();
-        core.with_command_submitter(move || {
-            let sink = q.clone();
-            Box::new(move |cmd| sink.borrow_mut().push_back(cmd))
-        });
+        core.with_command_submitter(Rc::new(RefCell::new(RaftQueueSubmitter(queue.clone()))));
 
         core.process_command(&mut markprice(94, 2_000));
 

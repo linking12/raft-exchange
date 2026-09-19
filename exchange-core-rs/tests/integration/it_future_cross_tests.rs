@@ -25,7 +25,7 @@ mod tests {
     const BTC_SYM: i32 = 10000;
     const ETH_SYM: i32 = 10001;
     const SPOT_SYM: i32 = 10003;
-    const FEE_SYM: i32 = 5991; // SYMBOL_MARGIN (USD/JPY scaled perpetual)
+    const FEE_SYM: i32 = 5991;
 
     const UID_1: i64 = 1;
     const UID_2: i64 = 2;
@@ -101,7 +101,6 @@ mod tests {
         }
     }
 
-    // Spot XBT/USD (initExchangeSymbols().get(0), symbolId 10003), fixed maker=10 / taker=20.
     fn spot_xbt_spec() -> CoreSymbolSpecification {
         CoreSymbolSpecification {
             symbol_id: SPOT_SYM,
@@ -117,12 +116,11 @@ mod tests {
         }
     }
 
-    // SYMBOLSPECFEE_USD_JPY (symbolId 5991): scaled perpetual, dynamic-ish fixed fees maker=2/taker=3.
     fn fee_usd_jpy_spec() -> CoreSymbolSpecification {
         CoreSymbolSpecification {
             symbol_id: FEE_SYM,
             symbol_type: SymbolType::FuturesContractPerpetual,
-            base_currency: QUOTE_ID, // USD
+            base_currency: QUOTE_ID,
             quote_currency: JPY,
             base_scale_k: 100_000,
             quote_scale_k: 10,
@@ -138,7 +136,6 @@ mod tests {
         }
     }
 
-    // XBT/USD perpetual (10000) + XBT/USD spot (10003): mirrors initFutureSymbols + initExchangeSymbols.
     fn setup_btc_and_spot() -> ExchangeApi {
         let mut api = ExchangeApi::new();
         api.add_currency(XBT, 1);
@@ -553,17 +550,13 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // testPlaceExchange: placing a spot order must account for the margin locked by an existing
-    // pending futures order in the same quote currency.
     #[test]
     fn place_exchange_spot_considers_futures_margin() {
         let mut api = setup_btc_and_spot();
         seed_user(&mut api, UID_1, 10_000, 1);
 
-        // Pending futures BID 1@10000 (no counterparty): locks margin(100) + fee(20) = 120 -> free 9880.
         assert_eq!(place(&mut api, 1005, UID_1, BTC_SYM, 10_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
 
-        // Spot BID 1@10000 needs lock 1*(10000+20)=10020; only 9880 free -> RISK_NSF until 140 more added.
         assert_eq!(api.place_order(spot_bid(2001, UID_1, 10_000, 10_000, 1)), CommandResultCode::RiskNsf);
         assert_eq!(api.balance_adjustment(UID_1, QUOTE_ID, 139, 2), CommandResultCode::Success);
         assert_eq!(api.place_order(spot_bid(2001, UID_1, 10_000, 10_000, 1)), CommandResultCode::RiskNsf);
@@ -571,13 +564,11 @@ mod tests {
         assert_eq!(api.place_order(spot_bid(2001, UID_1, 10_000, 10_000, 1)), CommandResultCode::Success);
 
         assert!(api.user_position(UID_1, BTC_SYM).is_some(), "futures position record kept");
-        // available = accounts - exchangeLocked = 10140 - 10020 = 120
+
         assert_eq!(api.user_account(UID_1, QUOTE_ID) - api.user_locked(UID_1, QUOTE_ID), 120, "disposable = 120");
         assert!(api.total_balance().is_global_zero());
     }
 
-    // testPlaceExchange2: placing a spot order while holding a profitable CROSS futures position;
-    // unrealized profit does not count toward the disposable balance for a new spot lock.
     #[test]
     fn place_exchange_spot_with_profit_position() {
         let mut api = setup_btc_and_spot();
@@ -604,10 +595,7 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // testCrossMarginLiquidation2: only the deeper-underwater cross leg (ETH short) is liquidated;
-    // the BTC long survives with its original open price.
     #[test]
-    #[ignore = "ENGINE DIFF (root-caused): Java 9540 / Rust 9840, diff=300 = ETH dynamic taker fee. ROOT: Rust cross FORCE-liquidation produces force_taker_size=0 — the FORCE BID at bankruptcy price does NOT trade against UID_3's resting ETH ask@15000, so the short is closed via a non-trade path (no taker fee AND liquidation_fee spec=0). Java's FORCE trades at 15000 and charges 300 taker fee. Deep liquidation-cascade-mechanics difference; fix needs core close-path change + conformance golden regen + conservation re-verify. See findings"]
     fn cross_margin_liquidation2_remaining_position() {
         let mut api = setup_two();
         seed_user(&mut api, UID_1, 10_000, 1);
@@ -621,15 +609,13 @@ mod tests {
         assert_eq!(api.user_position(UID_1, BTC_SYM).unwrap().open_volume, 1);
         assert_eq!(api.user_position(UID_1, ETH_SYM).unwrap().open_volume, 1);
 
-        // liquidity for the forced orders
         assert_eq!(place(&mut api, 1009, UID_3, BTC_SYM, 10_000, 1, OrderAction::Bid, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 1010, UID_3, ETH_SYM, 15_000, 1, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
         api.enable_liquidation();
-        assert_eq!(api.set_mark_price(BTC_SYM, 8_000), CommandResultCode::Success); // healthy, no liquidation
-        assert_eq!(api.set_mark_price(ETH_SYM, 25_000), CommandResultCode::Success); // ETH short liquidated
+        assert_eq!(api.set_mark_price(BTC_SYM, 8_000), CommandResultCode::Success);
+        assert_eq!(api.set_mark_price(ETH_SYM, 25_000), CommandResultCode::Success);
 
-        // 9840 -> 9540: ETH close where UID_1 is taker, dynamic taker fee = ceil(1*15000*2/100) = 300
         assert_eq!(api.user_account(UID_1, QUOTE_ID), 9_540);
         assert!(api.user_position(UID_1, ETH_SYM).is_none(), "ETH short liquidated");
         let btc = api.user_position(UID_1, BTC_SYM).expect("BTC long survives");
@@ -639,12 +625,10 @@ mod tests {
         assert!(api.total_balance().is_global_zero());
     }
 
-    // testGlobalBalance: a crossing IOC against several resting asks on a scaled USD/JPY perpetual
-    // keeps global balances conserved.
     #[test]
     fn global_balance_ioc_conservation() {
         let mut api = ExchangeApi::new();
-        api.add_currency(QUOTE_ID, 1); // USD
+        api.add_currency(QUOTE_ID, 1);
         api.add_currency(JPY, 1);
         assert_eq!(api.add_futures_symbol(fee_usd_jpy_spec()), CommandResultCode::Success);
         assert_eq!(api.set_mark_price(FEE_SYM, 10_000), CommandResultCode::Success);
@@ -660,7 +644,6 @@ mod tests {
         assert_eq!(place(&mut api, 303, UID_3, FEE_SYM, 160_000, 3, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
         assert_eq!(place(&mut api, 304, UID_3, FEE_SYM, 160_500, 20, OrderAction::Ask, MarginMode::Cross), CommandResultCode::Success);
 
-        // aggressive IOC BID 20@160500 (reserve 160500) sweeps 7+10+3 asks
         assert_eq!(
             api.submit(OrderCommand {
                 command: OrderCommandType::PlaceOrder,
