@@ -1,0 +1,8 @@
+R 1 SUCCESS
+R 2 SUCCESS
+R 3 SUCCESS
+STATE
+A 1 1 700
+EVENTS
+FE DEPOSIT uid=1 cur=1 free=1000 locked=0
+FE WITHDRAW uid=1 cur=1 free=700 locked=0

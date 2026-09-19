@@ -208,7 +208,6 @@ FE TRANSFER uid=2 cur=2 free=1000000259105 locked=0
 FE TRANSFER uid=2 cur=2 free=1000000269047 locked=0
 FE TRANSFER uid=3 cur=1 free=1000000001 locked=0
 FE TRANSFER uid=3 cur=1 free=1000000002 locked=0
-FE TRANSFER uid=3 cur=1 free=1000000002 locked=0
 FE TRANSFER uid=3 cur=1 free=1000000003 locked=0
 FE TRANSFER uid=3 cur=1 free=1000000006 locked=0
 FE TRANSFER uid=3 cur=1 free=1000000008 locked=0

@@ -24,9 +24,9 @@ FE TRANSFER uid=2 cur=2 free=999550 locked=0
 FE UNLOCKED uid=1 cur=1 free=999993 locked=7
 FE UNLOCKED uid=1 cur=1 free=999995 locked=0
 MATCH
-ER NEW NEW uid=2 oid=2 side=BID maker=0 px=90 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0
-ER NEW NEW uid=1 oid=1 side=ASK maker=0 px=100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0
-ER REDUCE NEW uid=1 oid=1 side=ASK maker=0 px=0 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0
-ER TRADE PARTIALLY_FILLED uid=1 oid=1 side=ASK maker=0 px=90 lastQty=5 lastPx=90 cumQty=5 cumQ=450 comm=0
-ER TRADE FILLED uid=2 oid=2 side=BID maker=1 px=90 lastQty=5 lastPx=90 cumQty=5 cumQ=450 comm=0
-ER CANCEL CANCELED uid=1 oid=1 side=ASK maker=0 px=0 lastQty=0 lastPx=0 cumQty=5 cumQ=450 comm=0
+ER NEW NEW uid=2 oid=2 side=BID maker=0 px=90 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0 commAsset=2
+ER NEW NEW uid=1 oid=1 side=ASK maker=0 px=100 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0 commAsset=2
+ER REDUCE NEW uid=1 oid=1 side=ASK maker=0 px=0 lastQty=0 lastPx=0 cumQty=0 cumQ=0 comm=0 commAsset=2
+ER TRADE PARTIALLY_FILLED uid=1 oid=1 side=ASK maker=0 px=90 lastQty=5 lastPx=90 cumQty=5 cumQ=450 comm=0 commAsset=2
+ER TRADE FILLED uid=2 oid=2 side=BID maker=1 px=90 lastQty=5 lastPx=90 cumQty=5 cumQ=450 comm=0 commAsset=2
+ER CANCEL CANCELED uid=1 oid=1 side=ASK maker=0 px=0 lastQty=0 lastPx=0 cumQty=5 cumQ=450 comm=0 commAsset=2

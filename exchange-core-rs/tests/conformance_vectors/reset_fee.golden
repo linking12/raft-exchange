@@ -1,0 +1,22 @@
+R 3 SUCCESS
+R 4 SUCCESS
+R 5 SUCCESS
+R 6 SUCCESS
+R 7 SUCCESS
+R 8 SUCCESS
+R 9 SUCCESS
+STATE
+A 1 1 999990
+A 1 2 980
+A 2 1 10
+A 2 2 998950
+EVENTS
+FE DEPOSIT uid=1 cur=1 free=1000000 locked=0
+FE DEPOSIT uid=2 cur=2 free=1000000 locked=0
+FE LOCKED uid=1 cur=1 free=999990 locked=10
+FE LOCKED uid=2 cur=2 free=998950 locked=1050
+FE RESET_FEE uid=0 cur=2 free=70 locked=0
+FE TRANSFER uid=1 cur=1 free=999990 locked=0
+FE TRANSFER uid=1 cur=2 free=980 locked=0
+FE TRANSFER uid=2 cur=1 free=10 locked=0
+FE TRANSFER uid=2 cur=2 free=998950 locked=0

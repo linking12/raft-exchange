@@ -238,7 +238,6 @@ FE TRANSFER uid=4 cur=1 free=999999991 locked=3
 FE TRANSFER uid=4 cur=1 free=999999993 locked=2
 FE TRANSFER uid=4 cur=1 free=999999993 locked=4
 FE TRANSFER uid=4 cur=2 free=1000000030471 locked=0
-FE TRANSFER uid=4 cur=2 free=1000000030471 locked=0
 FE TRANSFER uid=4 cur=2 free=1000000050639 locked=0
 FE TRANSFER uid=4 cur=2 free=1000000060216 locked=0
 FE TRANSFER uid=4 cur=2 free=1000000080384 locked=0

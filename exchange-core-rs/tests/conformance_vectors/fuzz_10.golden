@@ -154,7 +154,6 @@ FE TRANSFER uid=1 cur=1 free=1000000011 locked=0
 FE TRANSFER uid=1 cur=1 free=1000000012 locked=0
 FE TRANSFER uid=1 cur=1 free=1000000019 locked=0
 FE TRANSFER uid=1 cur=1 free=1000000020 locked=0
-FE TRANSFER uid=1 cur=1 free=1000000020 locked=0
 FE TRANSFER uid=1 cur=1 free=1000000022 locked=0
 FE TRANSFER uid=1 cur=1 free=1000000024 locked=0
 FE TRANSFER uid=1 cur=1 free=1000000028 locked=0
@@ -220,7 +219,6 @@ FE TRANSFER uid=3 cur=2 free=999999695580 locked=48311
 FE TRANSFER uid=3 cur=2 free=999999705033 locked=58372
 FE TRANSFER uid=3 cur=2 free=999999754074 locked=48311
 FE TRANSFER uid=3 cur=2 free=999999792202 locked=58098
-FE TRANSFER uid=3 cur=2 free=999999879607 locked=0
 FE TRANSFER uid=3 cur=2 free=999999879607 locked=0
 FE TRANSFER uid=3 cur=2 free=999999889376 locked=0
 FE TRANSFER uid=3 cur=2 free=999999947990 locked=0
