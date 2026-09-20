@@ -1,4 +1,4 @@
-# Claude Code Configuration for osl-mm-match
+# Claude Code Configuration for raft-exchange
 
 > AI-powered development workspace configuration
 
