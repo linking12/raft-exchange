@@ -21,6 +21,7 @@ import com.binance.raftexchange.server.exchange.events.KafkaEventQueue;
 import com.binance.raftexchange.server.exchange.events.KafkaProducerFactory;
 import com.binance.raftexchange.server.grpc.GrpcServerContainer;
 import com.binance.raftexchange.server.metrics.RaftExchangeMetrics;
+import com.binance.raftexchange.server.raft.NopHeartbeat;
 import com.binance.raftexchange.server.raft.RaftClusterContainer;
 import com.binance.raftexchange.server.raft.RaftClusterDiscovery;
 import com.binance.raftexchange.server.util.AppHome;
@@ -67,6 +68,9 @@ public class RaftExchangeApplication implements CommandLineRunner, ApplicationLi
     private String otherTopic;
     @Value("${raftexchange.kafka.enabled:true}")
     private boolean kafkaEnabled;
+    /** 0 = off (use when MM is live). No-MM / local spot: 1000. */
+    @Value("${raftexchange.heartbeat.interval-ms:0}")
+    private long heartbeatIntervalMs;
 
     private KafkaProducerFactory.Set kafkaSet;
     private KafkaEventQueue kafkaEventQueue;
@@ -76,6 +80,7 @@ public class RaftExchangeApplication implements CommandLineRunner, ApplicationLi
     private RaftClusterDiscovery raftClusterDiscovery;
     private RaftClusterContainer raftClusterContainer;
     private GrpcServerContainer grpcServerContainer;
+    private NopHeartbeat nopHeartbeat;
 
     public RaftClusterContainer getRaftClusterContainer() {
         return raftClusterContainer;
@@ -91,6 +96,8 @@ public class RaftExchangeApplication implements CommandLineRunner, ApplicationLi
         exchangeRuntime = startExchange();
         raftClusterContainer = startRaftClusterContainer();
         grpcServerContainer = startGrpc();
+        nopHeartbeat = new NopHeartbeat(raftClusterContainer, heartbeatIntervalMs);
+        nopHeartbeat.start();
     }
 
     private ExchangeRuntime startExchange() throws Exception {
@@ -135,6 +142,10 @@ public class RaftExchangeApplication implements CommandLineRunner, ApplicationLi
 
     @Override
     public void onApplicationEvent(ContextClosedEvent event) {
+        if (nopHeartbeat != null) {
+            nopHeartbeat.close();
+            nopHeartbeat = null;
+        }
         stopQuietly("gRPC server", grpcServerContainer == null ? null : grpcServerContainer::doStop);
         stopQuietly("Raft cluster", raftClusterContainer == null ? null : raftClusterContainer::doStop);
         stopQuietly("Exchange core", exchangeRuntime == null ? null : () -> exchangeRuntime.exchangeCore().shutdown());
