@@ -144,6 +144,11 @@ public final class LiquidationEngine extends LiquidationScheduledService {
         loanLiquidationEngine.checkLoans(cmd);
     }
 
+    /** 返回持有该 symbol 仓位的 uid 集合（可能 null）。 */
+    public MutableLongSet usersHoldingSymbol(int symbol) {
+        return symbolToUsers.get(symbol);
+    }
+
     /** 开仓 apply：把 uid 登记进 symbol → 持有者索引（所有节点确定性维护，不 gate）。 */
     public void onPositionOpened(UserProfile userProfile, SymbolPositionRecord pos) {
         symbolToUsers.getIfAbsentPut(pos.symbol, LongHashSet::new).add(userProfile.uid);

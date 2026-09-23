@@ -11,6 +11,7 @@ import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.SymbolPositionRecord;
 import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.UserStatus;
+import org.eclipse.collections.api.set.primitive.MutableLongSet;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.orderbook.OrderBookEventsHelper;
@@ -44,8 +45,13 @@ public final class FundingFeeCommandProcessor extends TwoStepCommandProcessor {
         final long markPrice = priceRecord.markPrice;
         int shardId = riskEngine.getShardId();
         FundingPaymentAndRecvNotional shardData = cmd.fundingPaymentAndRecvNotionalByShard[shardId];
-        riskEngine.getUserProfileService().getUserProfiles().forEachValue(userProfile -> {
-            if (userProfile.userStatus != UserStatus.ACTIVE) {
+        final MutableLongSet holders = riskEngine.getLiquidationEngine().usersHoldingSymbol(symbol);
+        if (holders == null) {
+            return;
+        }
+        holders.forEach(uid -> {
+            final UserProfile userProfile = riskEngine.getUserProfileService().getUserProfiles().get(uid);
+            if (userProfile == null || userProfile.userStatus != UserStatus.ACTIVE) {
                 return;
             }
             userProfile.processPositionRecord(symbol, position -> {
