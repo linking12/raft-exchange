@@ -12,6 +12,7 @@ import exchange.core2.core.common.api.ApiPlaceOrder;
 import exchange.core2.core.common.api.ApiSettleFundingFees;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import org.junit.jupiter.api.Test;
 
@@ -37,7 +38,9 @@ public class FundingLiquidationLatencyBench {
         System.out.printf("%12s  %20s  %24s%n", "holders", "funding join ms", "liquidation join ms");
 
         for (int holders : new int[]{1_000, 10_000, 100_000}) {
-            try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            // no-op results consumer: we measure command-completion latency (join), which does not
+            // need execution reports; this also avoids the report handler racing the async build.
+            try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, (cmd, seq) -> {})) {
                 final ExchangeApi api = container.getApi();
                 final List<CoreSymbolSpecification> symbols = container.initPerpetualSymbols();
                 final int symbolId = symbols.get(0).symbolId;
@@ -66,12 +69,17 @@ public class FundingLiquidationLatencyBench {
                     last.join();
                 }
 
+                // Arm the liquidation engines so LIQUIDATION_SCAN actually scans (same as triggerLiquidation).
+                container.getExchangeCore().getLiquidationEngines().forEach(LiquidationEngine::start);
+
                 // Warm up.
                 for (int r = 0; r < 2; r++) {
                     api.submitCommandAsync(ApiSettleFundingFees.builder().transactionId(orderId++).symbol(symbolId).action(OrderAction.BID).fundingRate(100L).rateScaleK(1000L).build()).join();
                     api.submitCommandAsync(ApiAdjustMarkPrice.builder().transactionId(orderId++).symbol(symbolId).markPrice(PRICE).build()).join();
                 }
 
+                // funding join now includes the R2 on-lane checkPositions (line 980); mark-price join
+                // is the targeted scan alone (adjustMarkPrice -> checkPositions), matching Rust's targeted scan.
                 final double fundingMs = minMs(3, () ->
                         api.submitCommandAsync(ApiSettleFundingFees.builder().transactionId(nextId()).symbol(symbolId).action(OrderAction.BID).fundingRate(100L).rateScaleK(1000L).build()));
                 final double liqMs = minMs(3, () ->
