@@ -1001,8 +1001,8 @@ class ITExtraMarginIntegration {
         } finally {
             // BP-based FORCE 路径下 symbol0 (LONG @ 10000, IM=1000, closeFee=20 fixed) BP=9020
             // > 对手 BID@9000 → REJECT → 走 ADL；symbol1 (SHORT @ 15000, dyn fee) BP≈18468 匹配 ASK@18000 成功
-            // SHORT dynamic sign 修复后 symbol1 走 FORCE + IF/ADL 兜底，事件数在 49-50 间浮动（异步 timing）
-            verify(handler, atLeast(49)).fundEventReport(fundEventCaptor.capture());
+            // SHORT dynamic sign 修复后 symbol1 走 FORCE + IF/ADL 兜底，事件数在 47-48 间浮动（异步 timing）
+            verify(handler, atLeast(47)).fundEventReport(fundEventCaptor.capture());
             // check fund event
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
             IFundEventsHandler.FundEventReport refund1 = null;

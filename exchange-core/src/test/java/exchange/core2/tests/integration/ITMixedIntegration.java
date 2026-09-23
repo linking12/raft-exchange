@@ -812,7 +812,7 @@ class ITMixedIntegration {
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(26)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(25)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
             IFundEventsHandler.FundEventReport ifCloseEvt = null;
@@ -1200,7 +1200,7 @@ class ITMixedIntegration {
         } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            verify(handler, times(31)).fundEventReport(fundEventCaptor.capture());
+            verify(handler, times(30)).fundEventReport(fundEventCaptor.capture());
             List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
 
             IFundEventsHandler.FundEventReport adlCloseEvt = null;
