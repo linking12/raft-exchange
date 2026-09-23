@@ -47,6 +47,7 @@ import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.core.event.IEventsHandler4Test;
 import exchange.core2.core.event.SimpleEventsProcessor4Test;
+import exchange.core2.core.orderbook.OrderBookDirectImpl;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
 import org.junit.jupiter.api.Test;
@@ -170,8 +171,12 @@ public class ConformanceExporter {
         // SCAN 循环的显式 triggerLiquidation,消除后台线程注入的非确定扫描。纯测试侧;LiquidationEngine 仅构造时读一次,
         // 须在 create() 前设;非清算向量不开清算引擎、不受影响。
         System.setProperty("raftexchange.liquidation.interval", "86400");
+        // 单撮合/单风控引擎(1ME/1RE):多分片下 fund event 由多个结果线程异步捕获,集合非确定(golden 逐次漂移);
+        // 单分片消除跨分片捕获竞态,与 Rust 单管线执行模型对齐。Direct(非 Naive)撮合簿:多 maker 吃单的 cumQty
+        // 口径与 Rust 一致(Naive 会把 FILLED 的 cumQty 退成单腿量)。
         try (ExchangeTestContainer c = ExchangeTestContainer.create(
-                PerformanceConfiguration.DEFAULT, new SimpleEventsProcessor4Test(handler))) {
+                PerformanceConfiguration.baseBuilder().orderBookFactory(OrderBookDirectImpl::new).build(),
+                new SimpleEventsProcessor4Test(handler))) {
             ExchangeApi api = c.getApi();
             long seq = 0;
             for (String raw : lines) {
