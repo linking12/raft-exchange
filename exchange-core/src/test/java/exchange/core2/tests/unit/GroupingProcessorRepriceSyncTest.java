@@ -113,7 +113,7 @@ class GroupingProcessorRepriceSyncTest {
 
             assertEquals(gPlaceBefore, gLiquidation, "强平命令不应触发切组");
             assertEquals(gLiquidation + 1, gReprice, "REPRICE 必须独占新 group（组边界同步冲前组 R2 后再读池）");
-            assertEquals(gReprice, gPlaceAfter, "reprice 之后的命令归入其新 group");
+            assertEquals(gReprice + 1, gPlaceAfter, "reprice 独占 group（组尾边界），其后命令另起新组");
         } finally {
             grouping.halt();
             thread.join(2_000);
