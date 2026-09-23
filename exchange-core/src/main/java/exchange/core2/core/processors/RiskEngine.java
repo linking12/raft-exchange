@@ -1377,7 +1377,6 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // 反向 fill 走 close→open 两步：先平已有反向仓（closedSize），剩余手数再反手开同向（sizeToOpen），各自独立收 taker fee。
                 long preVolume = takerSpr.openVolume;
                 // 本笔成交对应的挂单 pending 先释放；IOC/FOK 等无 pending 的 taker 返 0，跳过事件。
-                // 合成 FORCE 单从不 pendingHold，自身无 pending 可释放，故跳过（避免误扣共享 key 上的真实挂单）。
                 if (!isLiquidation) {
                     long pendingReleasedSize = takerSpr.pendingRelease(takerAction, mte.size);
                     if (pendingReleasedSize > 0) {
@@ -1417,10 +1416,8 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
             } else if (mte.eventType == MatcherEventType.REJECT || mte.eventType == MatcherEventType.REDUCE) {
                 // 撤/拒：仅退还挂单 pending（不动账户），后续 isEmpty 决定是否清理 position record。
-                // 同上守卫：FORCE 单被拒时同样无 pending 可释放。
                 if (!isLiquidation) {
                     long releasedSize = takerSpr.pendingRelease(takerAction, mte.size);
-                    // 与 TRADE 分支一致：仅在确有释放时才发 UnlockPending（避免零增量幻影通知）。
                     if (releasedSize > 0) {
                         long quoteLocked = takerOtherLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
                         long quoteBalance = takerUp.accounts.get(takerSpr.currency);
