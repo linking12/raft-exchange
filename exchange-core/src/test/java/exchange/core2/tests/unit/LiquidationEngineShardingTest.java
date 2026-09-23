@@ -1,9 +1,19 @@
 package exchange.core2.tests.unit;
 
+import exchange.core2.core.common.CoreSymbolSpecification;
 import exchange.core2.core.common.FundEvent;
+import exchange.core2.core.common.SymbolPositionRecord;
+import exchange.core2.core.common.SymbolType;
+import exchange.core2.core.common.UserProfile;
 import exchange.core2.core.common.config.ExchangeConfiguration;
 import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.processors.CurrencySpecificationProvider;
+import exchange.core2.core.processors.SymbolSpecificationProvider;
+import exchange.core2.core.processors.UserProfileService;
 import exchange.core2.core.processors.liquidation.LiquidationEngine;
+import exchange.core2.core.processors.loan.LoanService;
+import org.eclipse.collections.api.set.primitive.MutableLongSet;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +49,38 @@ class LiquidationEngineShardingTest {
         testCfg = ExchangeConfiguration.defaultBuilder()
                 .performanceCfg(PerformanceConfiguration.baseBuilder().build())
                 .build();
+    }
+
+    /**
+     * 快照恢复重建 symbolToUsers 时，openVolume==0 的挂单仓（pending>0）必须仍进索引；
+     * 否则 funding（信任索引、无全扫兜底）会在该挂单成交后永久漏结算这个持有者。
+     */
+    @Test
+    void updateProvider_reindexes_resting_order_holder() {
+        final int symbol = 700;
+        final long uid = 42L;
+
+        final SymbolSpecificationProvider ssp = new SymbolSpecificationProvider();
+        ssp.addSymbol(CoreSymbolSpecification.builder()
+            .symbolId(symbol).type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+            .baseCurrency(1).quoteCurrency(2).baseScaleK(1L).quoteScaleK(1L).build());
+
+        final UserProfileService ups = new UserProfileService();
+        final UserProfile up = ups.getUserProfileOrAddSuspended(uid);
+        final SymbolPositionRecord pos = new SymbolPositionRecord();
+        pos.symbol = symbol;
+        pos.openVolume = 0;      // resting order, not yet filled
+        pos.pendingBuySize = 1;  // but has a live pending order
+        up.positions.put(symbol, pos);
+
+        final LiquidationEngine engine = new LiquidationEngine(eventSupplier, 0, testCfg);
+        engine.updateProvider(ssp, new CurrencySpecificationProvider(), ups,
+            new IntObjectHashMap<>(), new LoanService());
+
+        final MutableLongSet holders = engine.usersHoldingSymbol(symbol);
+        assertNotNull(holders, "resting-order holder must be indexed after snapshot rebuild");
+        assertTrue(holders.contains(uid),
+            "openVolume==0 pending resting position must survive updateProvider rebuild");
     }
 
     /**

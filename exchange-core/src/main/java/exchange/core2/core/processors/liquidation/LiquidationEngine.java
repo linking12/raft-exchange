@@ -107,7 +107,7 @@ public final class LiquidationEngine extends LiquidationScheduledService {
                 return;
             }
             userProfile.positions.forEachValue(pos -> {
-                if (pos == null || pos.openVolume == 0) {
+                if (pos == null) {
                     return;
                 }
                 final CoreSymbolSpecification spec = symbolSpecificationProvider.getSymbolSpecification(pos.symbol);
