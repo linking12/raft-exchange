@@ -1376,17 +1376,18 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (mte.eventType == MatcherEventType.TRADE) {
                 // 反向 fill 走 close→open 两步：先平已有反向仓（closedSize），剩余手数再反手开同向（sizeToOpen），各自独立收 taker fee。
                 long preVolume = takerSpr.openVolume;
-
                 // 本笔成交对应的挂单 pending 先释放；IOC/FOK 等无 pending 的 taker 返 0，跳过事件。
-                long pendingReleasedSize = takerSpr.pendingRelease(takerAction, mte.size);
-                if (pendingReleasedSize > 0) {
-                    long quoteBalance = takerUp.accounts.get(takerSpr.currency);
-                    // takerOtherLocked 已扣除 takerSpr 入口贡献，叠加当前 lockedMargin 还原总占用。
-                    long quoteLocked = takerOtherLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
-                    eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerRoutingKey, takerSpr,
-                        quoteBalance - quoteLocked, quoteLocked);
+                // 合成 FORCE 单从不 pendingHold，自身无 pending 可释放，故跳过（避免误扣共享 key 上的真实挂单）。
+                if (!isLiquidation) {
+                    long pendingReleasedSize = takerSpr.pendingRelease(takerAction, mte.size);
+                    if (pendingReleasedSize > 0) {
+                        long quoteBalance = takerUp.accounts.get(takerSpr.currency);
+                        // takerOtherLocked 已扣除 takerSpr 入口贡献，叠加当前 lockedMargin 还原总占用。
+                        long quoteLocked = takerOtherLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
+                        eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerRoutingKey, takerSpr,
+                            quoteBalance - quoteLocked, quoteLocked);
+                    }
                 }
-
                 // sizeToOpen = 剩余开同向新仓的手数；两者之和 == mte.size。
                 final long sizeToOpen = takerSpr.closeCurrentPositionFutures(takerAction, mte.size, mte.price);
                 // closedSize = 本次成交里平掉已有反向仓的手数；
@@ -1402,12 +1403,10 @@ public final class RiskEngine implements WriteBytesMarshallable {
                     eventsHelper.sendClosePositionEvent(cmd, cmd.orderId, takerRoutingKey, isLiquidation, takerSpr,
                         quoteBalance - quoteLocked, quoteLocked);
                 }
-
                 if (sizeToOpen > 0) {
                     // openPositionMargin 用 markPrice（不是 mte.price）算初始保证金占用；mte.price 只进 openPriceSum 供后续 PnL。
                     takerSpr.openPositionMargin(takerAction, sizeToOpen, mte.price, spec,
                         lastPriceCache.get(spec.symbolId));
-
                     long openFee = CoreArithmeticUtils.calculateTakerFee(sizeToOpen, mte.price, spec);
                     openFee = CoreArithmeticUtils.sizePriceToCurrencyScale(openFee, spec, currencySpec);
                     long quoteBalance = takerUp.accounts.addToValue(quoteCurrency, -openFee);
@@ -1418,12 +1417,15 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 }
             } else if (mte.eventType == MatcherEventType.REJECT || mte.eventType == MatcherEventType.REDUCE) {
                 // 撤/拒：仅退还挂单 pending（不动账户），后续 isEmpty 决定是否清理 position record。
-                takerSpr.pendingRelease(takerAction, mte.size);
+                // 同上守卫：FORCE 单被拒时同样无 pending 可释放。
+                if (!isLiquidation) {
+                    takerSpr.pendingRelease(takerAction, mte.size);
 
-                long quoteLocked = takerOtherLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
-                long quoteBalance = takerUp.accounts.get(takerSpr.currency);
-                eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerRoutingKey, takerSpr,
-                    quoteBalance - quoteLocked, quoteLocked);
+                    long quoteLocked = takerOtherLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
+                    long quoteBalance = takerUp.accounts.get(takerSpr.currency);
+                    eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerRoutingKey, takerSpr,
+                        quoteBalance - quoteLocked, quoteLocked);
+                }
             }
             if (takerSpr.isEmpty()) {
                 // 仓位清零（openVolume + pendingBuy + pendingSell 全 0）触发清算：
