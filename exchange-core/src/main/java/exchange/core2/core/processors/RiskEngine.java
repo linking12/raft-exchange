@@ -1419,12 +1419,14 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 // 撤/拒：仅退还挂单 pending（不动账户），后续 isEmpty 决定是否清理 position record。
                 // 同上守卫：FORCE 单被拒时同样无 pending 可释放。
                 if (!isLiquidation) {
-                    takerSpr.pendingRelease(takerAction, mte.size);
-
-                    long quoteLocked = takerOtherLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
-                    long quoteBalance = takerUp.accounts.get(takerSpr.currency);
-                    eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerRoutingKey, takerSpr,
-                        quoteBalance - quoteLocked, quoteLocked);
+                    long releasedSize = takerSpr.pendingRelease(takerAction, mte.size);
+                    // 与 TRADE 分支一致：仅在确有释放时才发 UnlockPending（避免零增量幻影通知）。
+                    if (releasedSize > 0) {
+                        long quoteLocked = takerOtherLocked + calculateLockedMargin(takerSpr, spec, currencySpec);
+                        long quoteBalance = takerUp.accounts.get(takerSpr.currency);
+                        eventsHelper.sendUnlockPendingEvent(cmd, cmd.orderId, takerRoutingKey, takerSpr,
+                            quoteBalance - quoteLocked, quoteLocked);
+                    }
                 }
             }
             if (takerSpr.isEmpty()) {
