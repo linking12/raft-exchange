@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs.snapshot;
+
+option java_package = "com.binance.raftexchange.stubs.snapshot";
+option java_multiple_files = true;
+
+message SnapshotFetchRequest {
+  int64 snapshot_id = 1;
+}
+
+message SnapshotChunk {
+  string filename = 1;
+  bytes data = 2;
+  bool eof = 3;
+}
+
+service SnapshotTransferService {
+  rpc fetch(SnapshotFetchRequest) returns (stream SnapshotChunk);
+}

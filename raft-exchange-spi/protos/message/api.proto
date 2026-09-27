@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package com.binance.raftexchange.stubs.api;
+
+option java_package = "com.binance.raftexchange.stubs.api";
+option java_multiple_files = true;
+
+import "message/request.proto";
+import "message/response.proto";
+import "message/report.proto";
+
+service ApiCommandService{
+  rpc execApiCommand(stream com.binance.raftexchange.stubs.request.ApiCommand) returns (stream com.binance.raftexchange.stubs.response.CommandResult); // BI-DIRECTIONAL STREAMING
+}
+
+service ServerNodeService {
+  rpc listNodes(com.binance.raftexchange.stubs.request.NodeListCommand) returns (com.binance.raftexchange.stubs.response.NodeList);
+}
+
+service QueryService {
+  rpc searchOrder(com.binance.raftexchange.stubs.request.ApiOrderBookRequest) returns (com.binance.raftexchange.stubs.response.CommandResult);
+  rpc query(com.binance.raftexchange.stubs.report.ReportQuery) returns (com.binance.raftexchange.stubs.report.ReportResult);
+}

@@ -1,0 +1,861 @@
+package exchange.core2.tests.integration;
+
+import exchange.core2.core.IFundEventsHandler;
+import exchange.core2.core.processors.liquidation.LiquidationEngine;
+import exchange.core2.core.common.*;
+import exchange.core2.core.common.api.*;
+import exchange.core2.core.common.cmd.CommandResultCode;
+import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.core.event.IEventsHandler4Test;
+import exchange.core2.core.event.SimpleEventsProcessor4Test;
+import exchange.core2.tests.util.EventCheck;
+import exchange.core2.tests.util.ExchangeTestContainer;
+import exchange.core2.tests.util.LatencyTools;
+import lombok.extern.slf4j.Slf4j;
+import org.eclipse.collections.impl.map.sorted.mutable.TreeSortedMap;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import static exchange.core2.tests.util.TestConstants.*;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.Is.is;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.*;
+
+@Slf4j
+@ExtendWith(MockitoExtension.class)
+class ITPerpetualContractIntegration {
+
+    private int symbolId = 2;
+    private int quoteId = 840;
+
+    private SimpleEventsProcessor4Test processor;
+
+    @Captor
+    ArgumentCaptor<IFundEventsHandler.FundEventReport> fundEventCaptor;
+
+    private IEventsHandler4Test handler = spy(IEventsHandler4Test.handler);
+
+    @BeforeEach
+    public void before() {
+        processor = new SimpleEventsProcessor4Test(handler, true);
+    }
+
+    @AfterEach()
+    public void after() {
+    }
+
+    private PerformanceConfiguration getPerformanceConfiguration() {
+        return PerformanceConfiguration.baseBuilder().build();
+    }
+
+    @Test
+    public void testInvalidSymbol() {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            int symbolId0 = 10000;
+            CoreSymbolSpecification spec0 = CoreSymbolSpecification.builder()
+                    .symbolId(symbolId0)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                    .baseCurrency(11)
+                    .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
+                    .feeScaleK(100)
+                    .makerFee(1)
+                    .takerFee(2)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .build();
+            container.addSymbol(spec0);
+
+            int symbolId1 = 10001;
+            CoreSymbolSpecification spec1 = CoreSymbolSpecification.builder()
+                    .symbolId(symbolId1)
+                    .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
+                    .baseCurrency(11)
+                    .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
+                    .feeScaleK(100)
+                    .makerFee(1)
+                    .takerFee(2)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .build();
+            container.addSymbol(spec1);
+
+            container.addCurrency(spec0.baseCurrency, 0);
+            container.addCurrency(spec0.quoteCurrency, 0);
+            ApiSettleFundingFees cmd1 = ApiSettleFundingFees.builder()
+                    .transactionId(1004L)
+                    .symbol(symbolId1)
+                    .fundingRate(33)
+                    .rateScaleK(100)
+                    .build();
+            container.submitCommandSync(cmd1, CommandResultCode.INVALID_SYMBOL);
+
+            ApiSettleFundingFees cmd0 = ApiSettleFundingFees.builder()
+                    .transactionId(1003L)
+                    .symbol(symbolId0)
+                    .fundingRate(33)
+                    .rateScaleK(100)
+                    .build();
+            container.submitCommandSync(cmd0, CommandResultCode.RISK_MARKPRICE_NOT_AVAILABLE);
+
+            container.updateCurrentPriceTo(10000, spec0.symbolId, spec0.quoteCurrency);
+            container.submitCommandSync(cmd0, CommandResultCode.SUCCESS);
+        }
+    }
+
+    // cmd若发送的symbol不为永续, 需要报INVALID_SYMBOL错误 -- delivery
+    @Test
+    public void testInvalidSymbol2() {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            int symbolId0 = 10000;
+            CoreSymbolSpecification spec0 = CoreSymbolSpecification.builder()
+                    .symbolId(symbolId0)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                    .baseCurrency(11)
+                    .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
+                    .feeScaleK(100)
+                    .makerFee(1)
+                    .takerFee(2)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .build();
+            container.addSymbol(spec0);
+
+            int symbolId1 = 10001;
+            CoreSymbolSpecification spec1 = CoreSymbolSpecification.builder()
+                    .symbolId(symbolId1)
+                    .type(SymbolType.FUTURES_CONTRACT_DELIVERY)
+                    .baseCurrency(11)
+                    .quoteCurrency(12)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
+                    .initMargin(1)
+                    .initMarginScaleK(100)
+                    .feeScaleK(100)
+                    .makerFee(1)
+                    .takerFee(2)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(100)
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .build();
+            container.addSymbol(spec1);
+
+            container.addCurrency(spec0.baseCurrency, 0);
+            container.addCurrency(spec0.quoteCurrency, 0);
+
+            ApiSettlePNL cmd0 = ApiSettlePNL.builder()
+                    .settlePrice(10000L)
+                    .symbol(symbolId0)
+                    .build();
+            container.submitCommandSync(cmd0, CommandResultCode.INVALID_SYMBOL);
+
+            ApiSettlePNL cmd1 = ApiSettlePNL.builder()
+                    .settlePrice(10000L)
+                    .symbol(symbolId1)
+                    .build();
+            container.submitCommandSync(cmd1, CommandResultCode.SUCCESS);
+        }
+    }
+
+    // 没开出来单子交割后不需要结算 -- 交割
+    @Test
+    public void testDeliveryScenario0() throws Exception {
+        long deposit = 20000L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
+            List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
+
+            // 0. 充钱
+            List<Long> userIds = Collections.singletonList(UID_1);
+            Set<Integer> symbolIds = deliverySymbols.stream().map(CoreSymbolSpecification::getQuoteCurrency).collect(Collectors.toSet());
+            container.doDeposit(userIds, symbolIds, deposit);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(0));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            });
+
+            container.updateCurrentPriceTo(1000, deliverySymbols.get(0).symbolId, deliverySymbols.get(0).quoteCurrency);
+
+            // 下期货单但是没有成交, 所有没有开仓成功
+            container.createBidWithOrderId(MAKER_1, UID_1, 10, 1000, deliverySymbols.get(0).symbolId, MarginMode.CROSS);
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
+            });
+
+            ApiSettlePNL cmd1 = ApiSettlePNL.builder()
+                    .settlePrice(200L)
+                    .symbol(deliverySymbols.get(0).symbolId)
+                    .build();
+            container.submitCommandSync(cmd1, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
+            });
+        }
+    }
+
+    // 开出来单子后需要做交割结算 -- 交割
+    @Test
+    public void testDeliveryScenario1() throws Exception {
+        long deposit = 20000L;
+        int makerFee = 100;
+        int takerFee = 200;
+        List<IFundEventsHandler.FundEventReport> pnlSettlements = Collections.synchronizedList(new ArrayList<>());
+        doAnswer(inv -> {
+            IFundEventsHandler.FundEventReport r = inv.getArgument(0);
+            if (FundEvent.FundEventType.PNL_SETTLEMENT.equals(r.getEventType())) {
+                pnlSettlements.add(r);
+            }
+            return null;
+        }).when(handler).fundEventReport(any());
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT, processor)) {
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
+            List<CoreSymbolSpecification> deliverySymbols = container.initDeliverySymbols();
+
+            // 0. 充钱
+            List<Long> userIds = Arrays.asList(UID_1, UID_2);
+            Set<Integer> symbolIds = deliverySymbols.stream().map(CoreSymbolSpecification::getQuoteCurrency).collect(Collectors.toSet());
+            container.doDeposit(userIds, symbolIds, deposit);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            container.updateCurrentPriceTo(1000, deliverySymbols.get(0).symbolId, deliverySymbols.get(0).quoteCurrency);
+
+            // 下期货单但是没有成交, 所有没有开仓成功
+            container.createBidWithOrderId(MAKER_1, UID_1, 10, 1000, deliverySymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(TAKER_1, UID_2, 10, 1000, deliverySymbols.get(0).symbolId, MarginMode.CROSS);
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(deliverySymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+            });
+
+            ApiSettlePNL cmd1 = ApiSettlePNL.builder()
+                    .settlePrice(1500L)
+                    .symbol(deliverySymbols.get(0).symbolId)
+                    .build();
+            container.submitCommandSync(cmd1, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee - 5000));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            LatencyTools.waitForCondition(60_000, () ->
+                    pnlSettlements.stream().anyMatch(r -> r.getAccountId() == UID_1) &&
+                    pnlSettlements.stream().anyMatch(r -> r.getAccountId() == UID_2));
+
+            // 总事件数断言（fundEventReport 包含所有 type 的事件，断言期望条数 >=19）
+            verify(handler, atLeast(19)).fundEventReport(any());
+
+            // 诊断直接读 pnlSettlements（doAnswer 同步注入），避免再走 mockito captor —— 在 disruptor 线程异步推送下
+            // captor 的快照与 doAnswer 注入的列表会有时序差，先前 finally 用 captor 导致 iter≥2 时 pnl2=null 的 NPE。
+            IFundEventsHandler.FundEventReport pnl1 = pnlSettlements.stream()
+                    .filter(r -> r.getAccountId() == UID_1)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("PNL_SETTLEMENT for UID_1 not received"));
+            assertThat(UID_1, is(pnl1.getAccountId()));
+            assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl1.getEventType()));
+            assertThat(quoteId, is(pnl1.getBalances().getCurrency()));
+            assertThat(1L, is(pnl1.getBalances().getCurrencyScaleK()));
+            assertThat(24900L, is(pnl1.getBalances().getFree()));
+            assertThat(0L, is(pnl1.getBalances().getLocked()));
+            assertThat(10100, is(pnl1.getPositions().getSymbolId()));
+            assertThat(1L, is(pnl1.getPositions().getBaseScaleK()));
+            assertThat(1L, is(pnl1.getPositions().getQuoteScaleK()));
+            assertThat(PositionDirection.LONG, is(pnl1.getPositions().getDirection()));
+            assertThat(0L, is(pnl1.getPositions().getQuantity()));
+            assertThat(0L, is(pnl1.getPositions().getOpenPriceSum()));
+            assertThat(5000L, is(pnl1.getPositions().getCumRealized()));
+            assertThat(false, is(pnl1.getPositions().isIsolated()));
+            assertThat(0L, is(pnl1.getPositions().getIsolatedWallet()));
+            assertThat(1, is(pnl1.getPositions().getLeverage()));
+            assertThat(0L, is(pnl1.getPositions().getOpenPriceSum()));
+            assertThat(1000L, is(pnl1.getPositions().getMarkPrice()));
+            EventCheck.checkEvent(pnl1);
+            EventCheck.checkEventPending(pnl1);
+
+            IFundEventsHandler.FundEventReport pnl2 = pnlSettlements.stream()
+                    .filter(r -> r.getAccountId() == UID_2)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("PNL_SETTLEMENT for UID_2 not received"));
+            assertThat(UID_2, is(pnl2.getAccountId()));
+            assertThat(FundEvent.FundEventType.PNL_SETTLEMENT, is(pnl2.getEventType()));
+            assertThat(quoteId, is(pnl2.getBalances().getCurrency()));
+            assertThat(1L, is(pnl2.getBalances().getCurrencyScaleK()));
+            assertThat(14800L, is(pnl2.getBalances().getFree()));
+            assertThat(0L, is(pnl2.getBalances().getLocked()));
+            assertThat(10100, is(pnl2.getPositions().getSymbolId()));
+            assertThat(1L, is(pnl2.getPositions().getBaseScaleK()));
+            assertThat(1L, is(pnl2.getPositions().getQuoteScaleK()));
+            assertThat(PositionDirection.SHORT, is(pnl2.getPositions().getDirection()));
+            assertThat(0L, is(pnl2.getPositions().getQuantity()));
+            assertThat(0L, is(pnl2.getPositions().getOpenPriceSum()));
+            assertThat(-5000L, is(pnl2.getPositions().getCumRealized()));
+            assertThat(false, is(pnl2.getPositions().isIsolated()));
+            assertThat(0L, is(pnl2.getPositions().getIsolatedWallet()));
+            assertThat(1, is(pnl2.getPositions().getLeverage()));
+            assertThat(0L, is(pnl2.getPositions().getOpenPriceSum()));
+            assertThat(1000L, is(pnl2.getPositions().getMarkPrice()));
+            EventCheck.checkEvent(pnl2);
+            EventCheck.checkEventPending(pnl2);
+        }
+    }
+
+    // 没开出来单子交割后不需要结算 -- 永续
+    @Test
+    public void testPerpetualScenario0() throws Exception {
+        long deposit = 20000L;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
+            List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
+
+            // 0. 充钱
+            List<Long> userIds = Collections.singletonList(UID_1);
+            Set<Integer> symbolIds = perpetualSymbols.stream().map(CoreSymbolSpecification::getQuoteCurrency).collect(Collectors.toSet());
+            container.doDeposit(userIds, symbolIds, deposit);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(0));
+                assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            });
+
+            // update market price
+            container.updateCurrentPriceTo(10000, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
+
+            // 下期货单但是没有成交, 所有没有开仓成功
+            container.createBidWithOrderId(MAKER_1, UID_1, 10, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
+            });
+
+            ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
+                    .transactionId(1345L)
+                    .symbol(perpetualSymbols.get(0).symbolId)
+                    .rateScaleK(100L)
+                    .fundingRate(-100L)
+                    .build();
+            container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(1000L));
+            });
+        }
+    }
+
+    /*  开出来单子后需要做结算 -- 永续, 正向
+        合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
+        1. 开仓成功, 1000@10
+        2. 发起SettleFundingFees cmd
+        3. 做多profit -1%
+        4. 做空profit +1%
+        5. 平仓1手, check initMargin
+        6. 平仓9手, check initMarg
+        7. UID_1 check balance - profit
+    */
+    @Test
+    public void testPerpetualScenario1() throws Exception {
+        long deposit = 20000L;
+        int makerFee = 100;
+        int takerFee = 200;
+        int size = 10;
+        int fundingRate = 1;
+        int rateScale = 100;
+        int updatedPrice = 1500;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration(), processor)) {
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
+            List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
+
+            // 0. 充钱
+            List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
+            Set<Integer> symbolIds = new HashSet<>();
+            perpetualSymbols.forEach(spec -> {
+                symbolIds.add(spec.quoteCurrency);
+            });
+            container.doDeposit(userIds, symbolIds, deposit);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+            // 初始标记价格1000
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(1001).symbol(perpetualSymbols.get(0).symbolId).markPrice(updatedPrice).build(), CommandResultCode.SUCCESS);
+
+            // 开仓成功, 1000@10
+            container.createBidWithOrderId(MAKER_1, UID_1, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(TAKER_1, UID_2, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+
+            // update market price to 1500
+            container.updateCurrentPriceTo(updatedPrice, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
+
+            // openInitMargin用标记价格计算, 1500(标记价格) * 10(size) / 100(scale) = 150
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).profit, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+            });
+            // 永续cmd请求发起后, 合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
+            ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
+                    .transactionId(1345L)
+                    .action(OrderAction.BID)
+                    .symbol(perpetualSymbols.get(0).symbolId)
+                    .rateScaleK(rateScale)
+                    .fundingRate(fundingRate)
+                    .build();
+            container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().get(0).profit < 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openVolume, is(10L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openInitMarginSum, is(150L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).openPriceSum, is(10000L));
+                assertThat(profile.getPositions().getFirst().get(0).profit > 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(1L * size * fundingRate * updatedPrice / rateScale));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            // 平仓一手
+            container.createAskWithOrderId(MAKER_2, UID_1, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(TAKER_2, UID_3, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            // init margin = 150 - 150/10 = 135
+            // 关仓手续费：1 手 maker 关仓费 = makerFee/size = 10
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee - 10));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(size - 1L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-150L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(1000L * size - updatedPrice));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(135L));
+            });
+
+            // 平仓剩余所有, balance = deposit - makerFee - fundingFee + profit - 全程 10 手 maker 关仓费 (= makerFee)
+            container.createAskWithOrderId(MAKER_3, UID_1, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(TAKER_3, UID_3, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 - 150 - makerFee));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+        } finally {
+            // 33 原始事件 + 1 PNL_SETTLEMENT（其中一方仓位归零后 profit 入账）
+            verify(handler, times(34)).fundEventReport(fundEventCaptor.capture());
+            List<IFundEventsHandler.FundEventReport> fundEvents = fundEventCaptor.getAllValues();
+
+            IFundEventsHandler.FundEventReport event1 = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT) && report.getAccountId() == UID_1) {
+                    event1 = report;
+                    break;
+                }
+            }
+
+            assertThat(UID_1, is(event1.getAccountId()));
+            assertThat(quoteId, is(event1.getBalances().getCurrency()));
+            assertThat(10000, is(event1.getPositions().getSymbolId()));
+            assertThat(PositionDirection.LONG, is(event1.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event1.getEventType()));
+            assertThat(19750L, is(event1.getBalances().getFree()));
+            assertThat(150L, is(event1.getBalances().getLocked()));
+            assertThat(-150L, is(event1.getPositions().getCumRealized()));
+            assertThat(10000L, is(event1.getPositions().getOpenPriceSum()));
+            assertThat(10L, is(event1.getPositions().getQuantity()));
+            // 标记价格从10000变为1500, openVolume * priceRecord.markPrice - openPriceSum = 10 * 1500 - 10000 = 5000
+            assertThat(5000L, is(event1.getPositions().getUnrealizedProfit()));
+            // maintenanceMargin = 75
+            // totalPnl = 4850
+            // totalMargin = balance + pnl = 24750
+            // liquidationPrice = direction * (maintenanceMargin - totalMargin) + openPriceSum
+            // numerator = openPriceSum - totalBalance - pnlOther + mmOther
+            // numerator < 0时liquidationPrice=0
+            assertThat(-1L, is(event1.getPositions().getLiquidationPrice()));
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 24750) = 3
+            assertThat(3L, is(event1.getPositions().getMarginRatioScaleK()));
+
+            IFundEventsHandler.FundEventReport event2 = null;
+
+            for (int i = 0; i < fundEvents.size(); i++) {
+                IFundEventsHandler.FundEventReport report = fundEvents.get(i);
+                if (report.getEventType().equals(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT) && report.getAccountId() == UID_2) {
+                    event2 = report;
+                    break;
+                }
+            }
+
+            assertThat(UID_2, is(event2.getAccountId()));
+            assertThat(quoteId, is(event2.getBalances().getCurrency()));
+            assertThat(10000, is(event2.getPositions().getSymbolId()));
+            // assertThat(takerOrderId, is(event2.orderId));
+            assertThat(PositionDirection.SHORT, is(event2.getPositions().getDirection()));
+            assertThat(FundEvent.FundEventType.FUNDINGFEE_SETTLEMENT, is(event2.getEventType()));
+            assertThat(19650L, is(event2.getBalances().getFree()));
+            assertThat(150L, is(event2.getBalances().getLocked()));
+            assertThat(150L, is(event2.getPositions().getCumRealized()));
+            assertThat(10000L, is(event2.getPositions().getOpenPriceSum()));
+            assertThat(10L, is(event2.getPositions().getQuantity()));
+            // 标记价格和开仓价格相同, 所以算出来的unrealizedProfit=10000-10*1500=-5000
+            assertThat(-5000L, is(event2.getPositions().getUnrealizedProfit()));
+            // numerator = openPriceSum - totalBalance - pnlOther + mmOther
+            // numerator < 0时liquidationPrice=0
+            assertThat(2980L, is(event2.getPositions().getLiquidationPrice()));
+            // totalMargin = balance + totalPnl = 19800 - 4850 = 14950
+            // marginRatioScaleK = maintenanceMarginScaleK * maintenanceMargin / totalMargin = long (1000 * 75 / 14950) = 5
+            assertThat(5L, is(event2.getPositions().getMarginRatioScaleK()));
+        }
+    }
+
+    /*  开出来单子后需要做结算 -- 永续, 反向
+        合约价格高于现货价格时设置资金费率 < 0(fundingRate/rateScale=-1%), 此时做空用户按比例减钱给做多用户, 鼓励做多
+        1. 开仓成功, 1000@10
+        2. 发起SettleFundingFees cmd
+        3. 做多profit +1%
+        4. 做空profit -1%
+        5. 平仓1手, check initMargin
+        6. 平仓9手, check initMarg
+        7. UID_1 check balance + profit
+    */
+    @Test
+    public void testPerpetualScenario2() throws Exception {
+        long deposit = 20000L;
+        int makerFee = 100;
+        int takerFee = 200;
+        int size = 10;
+        int fundingRate = 1;
+        int rateScale = 100;
+        int updatedPrice = 1500;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
+            List<CoreSymbolSpecification> perpetualSymbols = container.initPerpetualSymbols();
+
+            // 0. 充钱
+            List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
+            Set<Integer> symbolIds = new HashSet<>();
+            perpetualSymbols.forEach(spec -> {
+                symbolIds.add(spec.quoteCurrency);
+            });
+            container.doDeposit(userIds, symbolIds, deposit);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(1001).symbol(perpetualSymbols.get(0).symbolId).markPrice(updatedPrice).build(), CommandResultCode.SUCCESS);
+            // UID_1做多, UID_2做空, settlement_funding_fee是空给多钱, 所以UID_1 profit会增加, UID_2 profit会减少
+            container.createBidWithOrderId(MAKER_1, UID_1, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(TAKER_1, UID_2, size, 1000, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+
+            // update market price
+            container.updateCurrentPriceTo(updatedPrice, perpetualSymbols.get(0).symbolId, perpetualSymbols.get(0).quoteCurrency);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).getDirection(), is(PositionDirection.SHORT));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellSize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuySize, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).marginMode, is(MarginMode.CROSS));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingSellAvgPrice, is(0L));
+                assertThat(profile.getPositions().get(perpetualSymbols.get(0).symbolId).get(0).pendingBuyAvgPrice, is(0L));
+            });
+
+            // 永续cmd请求发起后, 合约价格低于现货价格时设置资金费率 < 0(fundingRate/rateScale=-1%), 此时做空用户按比例减钱给做多用户, 鼓励做多
+            ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
+                    .transactionId(1345L)
+                    .action(OrderAction.ASK)
+                    .symbol(perpetualSymbols.get(0).symbolId)
+                    .rateScaleK(rateScale)
+                    .fundingRate(fundingRate)
+                    .build();
+            container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
+
+            LatencyTools.waitForCondition(60_000, () -> {
+                try {
+                    return container.getUserProfile(UID_1).getPositions().getFirst().get(0).profit > 0;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit > 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(1L * size * fundingRate * updatedPrice / rateScale));
+            });
+            container.validateUserState(UID_2, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit < 0, is(true));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            // 平仓一手
+            container.createAskWithOrderId(MAKER_2, UID_1, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(TAKER_2, UID_3, 1, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            // init margin = 150 - 150/10 = 135
+            // 关仓手续费：1 手 maker 关仓费 = makerFee/size = 10
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee - 10));
+                assertThat(profile.getPositions().getFirst().get(0).openVolume, is(size - 1L));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(150L));
+                assertThat(profile.getPositions().getFirst().get(0).openPriceSum, is(1000L * size - updatedPrice));
+                assertThat(profile.getPositions().getFirst().get(0).openInitMarginSum, is(135L));
+            });
+
+            // 平仓剩余所有, balance = deposit - makerFee - 全程 maker 关仓费 (= makerFee) + profit + fundingFee
+            container.createAskWithOrderId(MAKER_3, UID_1, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.createBidWithOrderId(TAKER_3, UID_3, 9, updatedPrice, perpetualSymbols.get(0).symbolId, MarginMode.CROSS);
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getPositions().size(), is(0));
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee + 5000 + 150 - makerFee));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+        }
+    }
+
+    /* 测试某订单多次发起SettleFundingFees是否正常
+        1. 开仓1000@10
+        2. 发起SettleFundingFees
+        3. check profit
+        4. 触发liquidation
+     */
+    @Test
+    public void testPerpetualScenario3() throws Exception {
+        long deposit = 5000L;
+        int size = 10;
+        int makerFee = 10 * size;
+        int takerFee = 20 * size;
+        int liquidateFee = 50 * size;
+        int fundingRate = 10;
+        int rateScale = 100;
+        int updatedPrice = 1100;
+        int price = 1000;
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(PerformanceConfiguration.DEFAULT)) {
+            container.getExchangeCore().liquidationEngines.forEach(LiquidationEngine::stop);
+            CoreSymbolSpecification spec = CoreSymbolSpecification.builder()
+                    .symbolId(10000)
+                    .type(SymbolType.FUTURES_CONTRACT_PERPETUAL)
+                    .baseCurrency(CURRENECY_XBT)
+                    .quoteCurrency(CURRENECY_USD)
+                    .baseScaleK(1)
+                    .quoteScaleK(1)
+                    .makerFee(10)
+                    .takerFee(20)
+                    .liquidationFee(50)
+                    .feeScaleK(0)
+                    .maintenanceMargin(TreeSortedMap.newMapWith(1000L, 5L, 100000L, 10L))
+                    .maintenanceMarginScaleK(10)
+                    .maxLeverage(TreeSortedMap.newMapWith(2000L, 5L, 100000L, 10L))
+                    .initMargin(1)
+                    .initMarginScaleK(100)
+                    .build();
+            container.addSymbol(spec);
+            container.addCurrency(spec.baseCurrency, 0);
+            container.addCurrency(spec.quoteCurrency, 0);
+            // 0. 充钱
+            List<Long> userIds = Arrays.asList(UID_1, UID_2, UID_3);
+            userIds.forEach(uid -> container.createUserWithMoney(uid, quoteId, deposit));
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+            assertTrue(container.totalBalanceReport().isGlobalBalancesAllZero());
+
+            container.submitCommandSync(ApiAdjustMarkPrice.builder().transactionId(1001).symbol(spec.symbolId).markPrice(updatedPrice).build(), CommandResultCode.SUCCESS);
+
+            // uid1做多, 1000@10手
+            container.createBidWithOrderId(MAKER_1, UID_1, size, price, spec.symbolId, MarginMode.CROSS);
+            container.createAskWithOrderId(TAKER_1, UID_2, size, price, spec.symbolId, MarginMode.CROSS);
+
+            // update market price, 当前价格升为1100
+            container.updateCurrentPriceTo(updatedPrice, spec.symbolId, spec.quoteCurrency);
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).getDirection(), is(PositionDirection.LONG));
+                assertThat(profile.getPositions().get(spec.symbolId).get(0).profit, is(0L));
+            });
+
+            // 永续cmd请求发起后, 合约价格高于现货价格时设置资金费率 > 0(fundingRate/rateScale=1%), 此时做多用户按比例减钱给做空用户, 鼓励做空
+            ApiSettleFundingFees cmd = ApiSettleFundingFees.builder()
+                    .transactionId(1345L)
+                    .action(OrderAction.BID)
+                    .symbol(spec.symbolId)
+                    .rateScaleK(rateScale)
+                    .fundingRate(fundingRate)
+                    .build();
+            container.submitCommandSync(cmd, CommandResultCode.SUCCESS);
+            // 第一次触发强平uid_1 position不会被强平
+            container.triggerLiquidation();
+
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - makerFee));
+                assertThat(profile.getPositions().size(), is(1));
+                assertThat(profile.getPositions().getFirst().get(0).profit, is(-1L * size * fundingRate * updatedPrice / rateScale));
+            });
+
+            Thread.sleep(1000L);
+
+            // UID_3先下一单准备吃掉UID_1强平单, 开20手预计会被吃掉10手
+            container.createBidWithOrderId(MAKER_3, UID_3, 20, 1100, spec.symbolId, MarginMode.CROSS);
+            container.getUserProfile(UID_1);
+            // 此时profit = 6000 - 10000 = -4000
+            // maintenance = notional * marginValue / maintenanceMarginScaleK = 6000 * 5 / 10 = 3000
+            // equity = balance + profit = 4900 - 4000 = 900 < maintenance(3000)
+            // 此时会触发强平, 需要强平4手 900 + 4 * 600 = 3300 > maintenance(3000)即可
+            // triggerLiquidation 向 ring buffer 投入强平命令后立即返回，多步流程（FORCE→IF→ADL）需要 LiquidationEngine
+            // 多次 republish 推进。取消钉核后 2s scheduler 调度被 OS 抖动 → 主动每 100ms triggerLiquidation 兜底，
+            // 绕开 scheduler 延迟保证 5s 内能完成全流程。
+            Runnable trigger = container::triggerLiquidation;
+            trigger.run();
+            LatencyTools.waitForCondition(5_000, () -> {
+                try {
+                    return container.getUserProfile(UID_1).getPositions().size() == 0;
+                } catch (Exception e) {
+                    return false;
+                }
+            }, trigger, 100);
+
+            //  openInitMarginSum -= openInitMarginSum * tradeSize / openVolume = 110 - 110 * 4/10 = 66L
+            // openPriceSum = 10 * 1000 - 4 * 600 = 7600L
+            // 强平时被强平方按 taker 关仓费收（Binance 模型），10 手 takerFee 关仓费 = takerFee
+            container.validateUserState(UID_1, profile -> {
+                assertThat(profile.getAccounts().get(quoteId), is(deposit - takerFee - liquidateFee - takerFee));
+                assertThat(profile.getPositions().size(), is(0));
+            });
+
+            container.getUserProfile(UID_1);
+            Thread.sleep(1000L);
+        }
+    }
+
+}
