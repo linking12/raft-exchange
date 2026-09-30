@@ -56,6 +56,46 @@ public abstract class ITFeesDynamicExchange {
         assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
     }
 
+    /**
+     * 回归：比例 maker 费下多 maker 不同价成交时，maker 费必须逐笔精确入账，全局守恒。
+     * 两笔 ask @150/@250（size 1）被一笔 BID(size 2) 吃掉：逐笔 maker 费 ⌈150/100⌉=2 + ⌈250/100⌉=3 = 5，
+     * 而按均价(200)聚合是 ⌈2·200/100⌉=4——修复前 BUY 侧差额 1 被销毁 → 全局不守恒（本用例即红）。
+     */
+    @Test
+    @Timeout(10)
+    public void proportionalMakerFee_multiMakerDifferentPrices_conservesNoDust_buy() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.initDynamicFeeSymbols();
+            container.createUserWithMoney(UID_1, CURRENECY_XBT, 1_000);
+            container.createUserWithMoney(UID_2, CURRENECY_XBT, 1_000);
+            container.createUserWithMoney(UID_3, CURRENECY_LTC, 1_000_000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_1).orderId(1).price(150).reservePrice(0).size(1).action(OrderAction.ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_2).orderId(2).price(250).reservePrice(0).size(1).action(OrderAction.ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_3).orderId(3).price(250).reservePrice(250).size(2).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build(), CommandResultCode.SUCCESS);
+
+            assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
+        }
+    }
+
+    /** 卖方 taker 版本：两笔 BID @250/@150 被一笔 ASK(size 2) 吃掉，同样验证 maker 费逐笔精确、全局守恒。 */
+    @Test
+    @Timeout(10)
+    public void proportionalMakerFee_multiMakerDifferentPrices_conservesNoDust_sell() throws Exception {
+        try (final ExchangeTestContainer container = ExchangeTestContainer.create(getPerformanceConfiguration())) {
+            container.initDynamicFeeSymbols();
+            container.createUserWithMoney(UID_1, CURRENECY_LTC, 1_000_000);
+            container.createUserWithMoney(UID_2, CURRENECY_LTC, 1_000_000);
+            container.createUserWithMoney(UID_3, CURRENECY_XBT, 1_000);
+
+            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_1).orderId(1).price(250).reservePrice(250).size(1).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_2).orderId(2).price(150).reservePrice(150).size(1).action(OrderAction.BID).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build(), CommandResultCode.SUCCESS);
+            container.submitCommandSync(ApiPlaceOrder.builder().uid(UID_3).orderId(3).price(150).reservePrice(0).size(2).action(OrderAction.ASK).orderType(GTC).symbol(SYMBOL_EXCHANGE_FEE).marginMode(MarginMode.ISOLATED).build(), CommandResultCode.SUCCESS);
+
+            assertThat(container.totalBalanceReport().isGlobalBalancesAllZero(), is(true));
+        }
+    }
+
     @Test
     @Timeout(10)
     public void shouldRequireTakerFees_GtcCancel1() throws Exception {
