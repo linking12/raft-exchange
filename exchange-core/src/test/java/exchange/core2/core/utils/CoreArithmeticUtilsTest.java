@@ -69,7 +69,7 @@ class CoreArithmeticUtilsTest {
         assertEquals(0L, CoreArithmeticUtils.ceilMulDiv(0L, 500L, 1_000_000L));
     }
 
-    /** b 为负数：用于 calculateAmountBidReleaseCorrMaker 中 takerFee < makerFee 的退化场景。 */
+    /** b 为负数：验证向零截断的 ceil 语义在负被乘数下正确。 */
     @Test
     void ceilMulDiv_negativeB_truncateTowardZeroEqualsCeil() {
         // ceil(5 * (-3) / 2) = ceil(-7.5) = -7

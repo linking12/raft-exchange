@@ -1128,19 +1128,17 @@ public final class RiskEngine implements WriteBytesMarshallable {
     }
 
     /**
-     * 卖单成交事件处理（per-shard）：taker 付 base 收 quote；同 shard 内的 maker 是买方，付 quote 收 base。两阶段：
+     * 卖单成交事件处理（per-shard）：taker 付 base 收 quote；同 shard 内的 maker 是买方，付 quote 收 base。三阶段：
      * <ol>
-     *   <li>循环内逐事件结算 maker（释放冻结 + 入 base + 扣 quote 实付）；</li>
-     *   <li>循环结束后用聚合量结算 taker（释放 base 冻结 + 入 quote = notional − takerFee）+ 平台 fees 入账。</li>
+     *   <li>逐成交事件结算 maker：释放其下单冻结，按成交价扣 quote、逐笔收 maker fee，入 base；同时累计 taker 聚合量；</li>
+     *   <li>结算 taker：释放 base 冻结、实扣 base，入 quote = notional − takerFee；</li>
+     *   <li>平台 fees 入账 = takerFee + 逐笔 maker fee 之和。</li>
      * </ol>
+     * 手续费逐笔精确入账（maker 付多少、fees 池收多少一致）；仅本金 scale 转换 dust（taker 聚合 vs maker 逐笔，
+     * 非 identity scale 才有）沉 exchangeLocked，由 SUSPEND sweep 兜底。
      */
     private void handleMatcherEventsExchangeSell(final OrderCommand cmd, MatcherTradeEvent mte,
         final CoreSymbolSpecification spec, final UserProfile takerUp) {
-        long takerSize = 0L;
-        long makerSize = 0L;
-
-        long takerNotional = 0L;
-        long makerNotional = 0L;
 
         final int quoteCurrency = spec.quoteCurrency;
         final CoreCurrencySpecification baseCurrencySpec =
@@ -1148,6 +1146,12 @@ public final class RiskEngine implements WriteBytesMarshallable {
         final CoreCurrencySpecification quoteCurrencySpec =
             currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
+        long takerSize = 0L;
+        long takerNotional = 0L;
+        long makerSize = 0L;
+        long makerFeeTotal = 0L;
+
+        // 阶段 1：逐成交事件结算 maker（买方）+ 累计 taker 聚合量。
         while (mte != null) {
             assert mte.eventType == MatcherEventType.TRADE;
 
@@ -1160,24 +1164,29 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 final long size = mte.size;
                 final UserProfile makerUp = userProfileService.getUserProfileOrAddSuspended(mte.matchedOrderUid);
 
-                // maker 下单时按 taker 费率 + bidderHoldPrice 冻结（保守，不知会以哪边成交）。
-                // 这里释放整块冻结，按"实际成交价 + maker 费率"扣实付。
-                long holdQuote = CoreArithmeticUtils.calculateAmountBidTakerFee(size, mte.bidderHoldPrice, spec);
-                holdQuote = CoreArithmeticUtils.sizePriceToCurrencyScale(holdQuote, spec, quoteCurrencySpec);
-                long quoteRefund =
-                    CoreArithmeticUtils.calculateAmountBidReleaseCorrMaker(size, mte.bidderHoldPrice, mte.price, spec);
-                quoteRefund = CoreArithmeticUtils.sizePriceToCurrencyScale(quoteRefund, spec, quoteCurrencySpec);
+                // maker 下单时按 taker 费率 + bidderHoldPrice 保守冻结；此处整块释放。
+                final long holdQuote = CoreArithmeticUtils.sizePriceToCurrencyScale(
+                    CoreArithmeticUtils.calculateAmountBidTakerFee(size, mte.bidderHoldPrice, spec), spec, quoteCurrencySpec);
+
+                // 应退 = 价差(冻结价 − 成交价) + 释放的 taker 费预留 − 逐笔 maker fee。
+                // maker fee 独立逐笔计（不与 taker 费预留挤同一个 ceil），保证 fees 池逐笔精确。
+                final long reservedTakerFee = CoreArithmeticUtils.calculateTakerFee(size, mte.bidderHoldPrice, spec);
+                final long makerFee = CoreArithmeticUtils.calculateMakerFee(size, mte.price, spec);
+                makerFeeTotal += makerFee;
+                final long quoteRefund = CoreArithmeticUtils.sizePriceToCurrencyScale(
+                    Math.multiplyExact(size, Math.subtractExact(mte.bidderHoldPrice, mte.price)) + reservedTakerFee - makerFee,
+                    spec, quoteCurrencySpec);
+
                 makerUp.exchangeLocked.addToValue(quoteCurrency, -holdQuote);
-                // 净 +(refund − hold) = −实付 = −(size·price + maker fee)。
-                long quoteBalance = makerUp.accounts.addToValue(quoteCurrency, quoteRefund - holdQuote);
+                // 净 quote 变动 = refund − hold = −(size·成交价 + maker fee)。
+                final long quoteBalance = makerUp.accounts.addToValue(quoteCurrency, quoteRefund - holdQuote);
 
-                // calculateAmountAsk(size) = size：ASK 侧不收 fee（fee 走 quote 侧），转手 base 数量即冻结量。
-                long baseGained = CoreArithmeticUtils.calculateAmountAsk(size);
-                baseGained = CoreArithmeticUtils.symbolToCurrencyScale(baseGained, spec, baseCurrencySpec);
-                long baseBalance = makerUp.accounts.addToValue(spec.baseCurrency, baseGained);
+                // maker 收 base（ASK 侧不收 fee，fee 只走 quote）。
+                final long baseBalance = makerUp.accounts.addToValue(spec.baseCurrency, CoreArithmeticUtils
+                    .symbolToCurrencyScale(CoreArithmeticUtils.calculateAmountAsk(size), spec, baseCurrencySpec));
 
-                long quoteLocked = calculateLocked(makerUp, quoteCurrency);
-                long baseLocked = calculateLocked(makerUp, spec.baseCurrency);
+                final long quoteLocked = calculateLocked(makerUp, quoteCurrency);
+                final long baseLocked = calculateLocked(makerUp, spec.baseCurrency);
                 if (quoteRefund > 0) {
                     this.eventsHelper.sendUnLockEvent(cmd, mte.matchedOrderId, makerUp.uid, spec.symbolId,
                         quoteCurrency, quoteBalance - quoteLocked, quoteLocked);
@@ -1187,71 +1196,67 @@ public final class RiskEngine implements WriteBytesMarshallable {
                 this.eventsHelper.sendTransferEvent(cmd, mte.matchedOrderId, makerUp.uid, spec.baseCurrency,
                     spec.symbolId, baseBalance - baseLocked, baseLocked);
 
-                makerNotional += Math.multiplyExact(mte.size, mte.price);
                 makerSize += size;
             }
 
             mte = mte.nextEvent;
         }
 
-        // hoist：takerFee 在 taker 结算块和下面 fees 池都要用，避免重复 ceilMulMulDiv。
+        // takerFee 用平均成交价聚合计一次（taker 结算与 fees 池共用，避免重复 ceilMulMulDiv）。
         final long avgTakerPrice = takerSize > 0 ? takerNotional / takerSize : 0;
         final long takerFee = CoreArithmeticUtils.calculateTakerFee(takerSize, avgTakerPrice, spec);
 
+        // 阶段 2：结算 taker（卖方）—— 释放 base 冻结、实扣 base，入 quote = notional − takerFee。
         if (takerUp != null) {
-            // taker 是卖方：释放 base 冻结、实际扣 base；加 quote = notional − takerFee。
-            long basePaid = CoreArithmeticUtils.symbolToCurrencyScale(CoreArithmeticUtils.calculateAmountAsk(takerSize),
-                spec, baseCurrencySpec);
+            final long basePaid = CoreArithmeticUtils.symbolToCurrencyScale(
+                CoreArithmeticUtils.calculateAmountAsk(takerSize), spec, baseCurrencySpec);
             takerUp.exchangeLocked.addToValue(spec.baseCurrency, -basePaid);
-            long baseBalance = takerUp.accounts.addToValue(spec.baseCurrency, -basePaid);
+            final long baseBalance = takerUp.accounts.addToValue(spec.baseCurrency, -basePaid);
 
-            long toBeAdded =
-                CoreArithmeticUtils.sizePriceToCurrencyScale(takerNotional - takerFee, spec, quoteCurrencySpec);
-            long quoteBalance = takerUp.accounts.addToValue(quoteCurrency, toBeAdded);
+            final long quoteBalance = takerUp.accounts.addToValue(quoteCurrency,
+                CoreArithmeticUtils.sizePriceToCurrencyScale(takerNotional - takerFee, spec, quoteCurrencySpec));
 
-            long quoteLocked = calculateLocked(takerUp, quoteCurrency);
-            long baseLocked = calculateLocked(takerUp, spec.baseCurrency);
+            final long quoteLocked = calculateLocked(takerUp, quoteCurrency);
+            final long baseLocked = calculateLocked(takerUp, spec.baseCurrency);
             this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, takerUp.uid, quoteCurrency, spec.symbolId,
                 quoteBalance - quoteLocked, quoteLocked);
             this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, takerUp.uid, spec.baseCurrency, spec.symbolId,
                 baseBalance - baseLocked, baseLocked);
         }
 
+        // 阶段 3：平台手续费入账 = takerFee + 逐笔 maker fee 之和。
         if (takerSize != 0 || makerSize != 0) {
-            // fees 池入账用 avg-price 重算 takerFee+makerFee 后做单次 sizePriceToCurrencyScale，
-            // 避免 per-event ceil + 多次 scale 转换累积 dust（与 maker 块的 per-event 截断不对称是有意的：
-            // 单笔 dust 沉积在 exchangeLocked，SUSPEND 时 sweep 到 fees，全局守恒）。
-            long avgMakerPrice = makerSize > 0 ? makerNotional / makerSize : 0;
-            long makerFee = CoreArithmeticUtils.calculateMakerFee(makerSize, avgMakerPrice, spec);
-
-            long toBeAdded = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee + makerFee, spec, quoteCurrencySpec);
-            fees.addToValue(quoteCurrency, toBeAdded);
+            fees.addToValue(quoteCurrency,
+                CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee + makerFeeTotal, spec, quoteCurrencySpec));
         }
     }
 
     /**
-     * 买单成交事件处理（per-shard）：taker 付 quote 收 base；同 shard 内的 maker 是卖方，付 base 收 quote。两阶段：
+     * 买单成交事件处理（per-shard）：taker 付 quote 收 base；同 shard 内的 maker 是卖方，付 base 收 quote。三阶段：
      * <ol>
-     *   <li>循环内逐事件结算 maker（释放 base 冻结 + 入 quote − maker fee）；</li>
-     *   <li>循环结束后结算 taker（按 bidderHoldPrice 退价差/费差 + 入 base）+ 平台 fees 入账。</li>
+     *   <li>逐成交事件结算 maker：释放 base 冻结、实扣 base，入 quote = 成交对价 − 逐笔 maker fee；同时累计 taker 聚合量；</li>
+     *   <li>结算 taker：按 bidderHoldPrice 退价差/费差、入 base；</li>
+     *   <li>平台 fees 入账 = takerFee + 逐笔 maker fee 之和。</li>
      * </ol>
-     * bidderHoldPrice 是 taker 下单时的参考冻结价（limit order = 限价、FOK/IOC_BUDGET = reserveBidPrice），通常 ≥ 实际成交价，
-     * 差额在结算时退给用户。
+     * bidderHoldPrice = taker 下单参考冻结价（limit = 限价、FOK/IOC_BUDGET = reserveBidPrice），通常 ≥ 成交价，差额退回。
+     * 手续费逐笔精确入账；仅本金 scale 转换 dust 沉 exchangeLocked、由 SUSPEND sweep 兜底（见 sell handler 注释）。
      */
     private void handleMatcherEventsExchangeBuy(final OrderCommand cmd, MatcherTradeEvent mte,
         final CoreSymbolSpecification spec, final UserProfile takerUp) {
-        long takerSize = 0L;
-        long makerSize = 0L;
 
-        long takerNotional = 0L;
-        long takerHoldNotional = 0L;
-        long makerNotional = 0L;
         final int quoteCurrency = spec.quoteCurrency;
         final CoreCurrencySpecification baseCurrencySpec =
             currencySpecificationProvider.getCurrencySpecification(spec.baseCurrency);
         final CoreCurrencySpecification quoteCurrencySpec =
             currencySpecificationProvider.getCurrencySpecification(spec.quoteCurrency);
 
+        long takerSize = 0L;
+        long takerNotional = 0L;
+        long takerHoldNotional = 0L;
+        long makerSize = 0L;
+        long makerFeeTotal = 0L;
+
+        // 阶段 1：逐成交事件结算 maker（卖方）+ 累计 taker 聚合量。
         while (mte != null) {
             assert mte.eventType == MatcherEventType.TRADE;
 
@@ -1264,84 +1269,79 @@ public final class RiskEngine implements WriteBytesMarshallable {
             if (uidForThisHandler(mte.matchedOrderUid)) {
                 final long size = mte.size;
                 final UserProfile makerUp = userProfileService.getUserProfileOrAddSuspended(mte.matchedOrderUid);
-                // calculateAmountBid(size, price) = size × price：原始成交对价（未扣 maker fee）。
-                final long quoteGained = CoreArithmeticUtils.calculateAmountBid(size, mte.price);
 
-                // maker 是卖方，下单时按 base 数量直接冻结（calculateAmountAsk(size) = size），这里全释放并实际扣 base。
-                long basePaid = CoreArithmeticUtils.symbolToCurrencyScale(CoreArithmeticUtils.calculateAmountAsk(size),
-                    spec, baseCurrencySpec);
+                // maker 是卖方，下单时按 base 数量直接冻结（calculateAmountAsk = size）；此处释放并实扣 base。
+                final long basePaid = CoreArithmeticUtils.symbolToCurrencyScale(
+                    CoreArithmeticUtils.calculateAmountAsk(size), spec, baseCurrencySpec);
                 makerUp.exchangeLocked.addToValue(spec.baseCurrency, -basePaid);
-                long baseBalance = makerUp.accounts.addToValue(spec.baseCurrency, -basePaid);
+                final long baseBalance = makerUp.accounts.addToValue(spec.baseCurrency, -basePaid);
 
-                // maker 收到 quote = 成交对价 − maker fee。
-                long fee = CoreArithmeticUtils.calculateMakerFee(size, mte.price, spec);
-                long toBeAdded =
-                    CoreArithmeticUtils.sizePriceToCurrencyScale(quoteGained - fee, spec, quoteCurrencySpec);
-                long quoteBalance = makerUp.accounts.addToValue(quoteCurrency, toBeAdded);
+                // maker 收 quote = 成交对价(size×成交价) − 逐笔 maker fee。
+                final long makerFee = CoreArithmeticUtils.calculateMakerFee(size, mte.price, spec);
+                makerFeeTotal += makerFee;
+                final long quoteBalance = makerUp.accounts.addToValue(quoteCurrency, CoreArithmeticUtils
+                    .sizePriceToCurrencyScale(CoreArithmeticUtils.calculateAmountBid(size, mte.price) - makerFee,
+                        spec, quoteCurrencySpec));
 
-                long quoteLocked = calculateLocked(makerUp, quoteCurrency);
-                long baseLocked = calculateLocked(makerUp, spec.baseCurrency);
+                final long quoteLocked = calculateLocked(makerUp, quoteCurrency);
+                final long baseLocked = calculateLocked(makerUp, spec.baseCurrency);
                 this.eventsHelper.sendTransferEvent(cmd, mte.matchedOrderId, makerUp.uid, quoteCurrency, spec.symbolId,
                     quoteBalance - quoteLocked, quoteLocked);
                 this.eventsHelper.sendTransferEvent(cmd, mte.matchedOrderId, makerUp.uid, spec.baseCurrency,
                     spec.symbolId, baseBalance - baseLocked, baseLocked);
 
-                makerNotional += Math.multiplyExact(mte.size, mte.price);
                 makerSize += size;
             }
 
             mte = mte.nextEvent;
         }
 
-        // hoist：takerFee 在 taker 块和下面 fees 池都要用，避免重复 ceilMulMulDiv。
+        // takerFee 用平均成交价聚合计一次（taker 结算与 fees 池共用，避免重复 ceilMulMulDiv）。
         final long avgTakerPrice = takerSize > 0 ? takerNotional / takerSize : 0;
         final long takerFee = CoreArithmeticUtils.calculateTakerFee(takerSize, avgTakerPrice, spec);
 
+        // 阶段 2：结算 taker（买方）—— 释放 quote 冻结、退价差/费差，入 base。
         if (takerUp != null) {
-            long leftover;
-            long holdQuote;
+            final long leftover;
+            final long holdQuote;
             if (cmd.command == OrderCommandType.PLACE_ORDER
                 && (cmd.orderType == OrderType.FOK_BUDGET || cmd.orderType == OrderType.IOC_BUDGET)) {
-                // FOK_BUDGET/IOC_BUDGET：冻结的是预算上限 heldTotal，未匹配部分 leftover 原样退。
-                long heldTotal = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(cmd.size, cmd.price, spec);
+                // BUDGET 单：冻结的是预算上限 heldTotal，未匹配部分 leftover 原样退。
+                final long heldTotal = CoreArithmeticUtils.calculateAmountBidTakerFeeForBudget(cmd.size, cmd.price, spec);
                 leftover = heldTotal - (takerNotional + takerFee);
                 takerHoldNotional = takerNotional;
                 holdQuote = CoreArithmeticUtils.sizePriceToCurrencyScale(heldTotal, spec, quoteCurrencySpec);
             } else {
-                // 普通单：feeHeld 按 bidderHoldPrice 冻、takerFee 按实际成交价收，差额 leftover 退给用户。
-                long feeHeld = CoreArithmeticUtils.calculateTakerFee(takerSize, takerHoldNotional / takerSize, spec);
+                // 普通单：feeHeld 按 bidderHoldPrice 冻、takerFee 按成交价收，差额 leftover 退回。
+                final long feeHeld = CoreArithmeticUtils.calculateTakerFee(takerSize, takerHoldNotional / takerSize, spec);
                 leftover = feeHeld - takerFee;
-                holdQuote =
-                    CoreArithmeticUtils.sizePriceToCurrencyScale(takerHoldNotional + feeHeld, spec, quoteCurrencySpec);
+                holdQuote = CoreArithmeticUtils.sizePriceToCurrencyScale(takerHoldNotional + feeHeld, spec, quoteCurrencySpec);
             }
-            // 价差(holdNotional − notional) + leftover = 应退 quote。
-            long quoteRefund = CoreArithmeticUtils
-                .sizePriceToCurrencyScale(takerHoldNotional - takerNotional + leftover, spec, quoteCurrencySpec);
+            // 应退 = 价差(冻结名义 − 成交名义) + leftover。
+            final long quoteRefund = CoreArithmeticUtils.sizePriceToCurrencyScale(
+                takerHoldNotional - takerNotional + leftover, spec, quoteCurrencySpec);
 
             takerUp.exchangeLocked.addToValue(quoteCurrency, -holdQuote);
-            // 净 +(refund − hold) = −实付 = −(notional + takerFee)。
-            long quoteBalance = takerUp.accounts.addToValue(quoteCurrency, quoteRefund - holdQuote);
-            long quoteLocked = calculateLocked(takerUp, quoteCurrency);
+            // 净 quote 变动 = refund − hold = −(notional + takerFee)。
+            final long quoteBalance = takerUp.accounts.addToValue(quoteCurrency, quoteRefund - holdQuote);
+            final long quoteLocked = calculateLocked(takerUp, quoteCurrency);
             if (quoteRefund > 0) {
-                this.eventsHelper.sendUnLockEvent(cmd, spec.symbolId, quoteCurrency, quoteBalance - quoteLocked,
-                    quoteLocked);
+                this.eventsHelper.sendUnLockEvent(cmd, spec.symbolId, quoteCurrency, quoteBalance - quoteLocked, quoteLocked);
             }
-            long toBeAdded = CoreArithmeticUtils.symbolToCurrencyScale(takerSize, spec, baseCurrencySpec);
-            long baseBalance = takerUp.accounts.addToValue(spec.baseCurrency, toBeAdded);
 
-            long baseLocked = calculateLocked(takerUp, spec.baseCurrency);
+            final long baseBalance = takerUp.accounts.addToValue(spec.baseCurrency,
+                CoreArithmeticUtils.symbolToCurrencyScale(takerSize, spec, baseCurrencySpec));
+            final long baseLocked = calculateLocked(takerUp, spec.baseCurrency);
             this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, takerUp.uid, quoteCurrency, spec.symbolId,
                 quoteBalance - quoteLocked, quoteLocked);
             this.eventsHelper.sendTransferEvent(cmd, cmd.orderId, takerUp.uid, spec.baseCurrency, spec.symbolId,
                 baseBalance - baseLocked, baseLocked);
         }
 
+        // 阶段 3：平台手续费入账 = takerFee + 逐笔 maker fee 之和。
         if (takerSize != 0 || makerSize != 0) {
-            long avgMakerPrice = makerSize > 0 ? makerNotional / makerSize : 0;
-            long makerFee = CoreArithmeticUtils.calculateMakerFee(makerSize, avgMakerPrice, spec);
-
-            long toBeAdded = CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee + makerFee, spec, quoteCurrencySpec);
-            fees.addToValue(quoteCurrency, toBeAdded);
+            fees.addToValue(quoteCurrency,
+                CoreArithmeticUtils.sizePriceToCurrencyScale(takerFee + makerFeeTotal, spec, quoteCurrencySpec));
         }
     }
 

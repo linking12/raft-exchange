@@ -260,10 +260,9 @@ A 下买单 BTC/USDT：size=10 satoshi (×10^8), price=1_001_000 (×10^6 USDT/BT
   trade = 10 × 1_000_000 = 10_000_000 (内部) → 100000 (currency) = 0.100000 USDT
   maker_fee = ⌈10 × 1_000_000 × 5 / 10000⌉ = 5000 (内部) → 50 (currency) = 0.000050 USDT
   
-退还（calculateAmountBidReleaseCorrMaker）：
-  hold 时算的是 taker fee（15‰），实际是 maker（5‰），多冻结要退
-  退 = 总冻 - 实际成本
-     = 10_025_015 - 10_000_000 - 5000 = 20_015 (内部) → 200 (currency) = 0.000200 USDT  ← ceil 退还
+退还（RiskEngine maker 结算，逐笔）：
+  hold 时按 taker fee（15‰）冻结，实际按 maker（5‰）成交；结算释放整块 taker 费预留、逐笔改收 maker fee
+  退 = 价差(冻结价−成交价) + 释放的 taker 费预留 − 逐笔 maker fee = 总冻 − 实际成本(本金 + maker fee)
 
 A 终态：
   扣本金：9_999.899750 - 0.100000 = 9_999.799750
@@ -790,7 +789,7 @@ c 可负的需求来自全仓强平价 SHORT 场景的 denom 可为负。truncMu
 | 溢出 | fixed: 两次 multiplyExact；变动: ceilMulMulDiv hybrid |
 | 调用点 | bid 下单前按 taker 费率冻结上限 |
 
-**为什么按 taker 冻结**：taker 费率通常高于 maker。下单时不知道会以什么角色成交，按贵的（taker）冻，多余的等成交后退（`calculateAmountBidReleaseCorrMaker`）。
+**为什么按 taker 冻结**：taker 费率通常高于 maker。下单时不知道会以什么角色成交，按贵的（taker）冻，多余的等成交后退（`RiskEngine` maker 结算里释放整块 taker 费预留、逐笔改收 maker fee）。
 
 **业务示例**：
 
@@ -806,33 +805,19 @@ total = 5e16 + 75e12
 - `multiplyExact(size, price)` 溢出：上游漏校验单子上限，应抛出回退
 - `ceilMulMulDiv` 内部全 128-bit fallback：正常路径，业务无感
 
-#### `calculateAmountBidReleaseCorrMaker(long size, long bidderHoldPrice, long price, CoreSymbolSpecification spec)`
+#### ~~`calculateAmountBidReleaseCorrMaker(...)`~~（已移除）
 
-| 字段 | 值 |
-|---|---|
-| 签名 | `(size, bidderHoldPrice, price, spec) → long` |
-| 返回 | 应退还总额（本金差 + fee 差） |
-| 取整 | fee 差走 ceil（冻结侧也是 ceil，对称才能闭环） |
+原 helper 把"释放 taker 费预留"与"收 maker 费"挤进**同一个 ceil**（`feeDiff = ⌈size × (bidderHoldPrice × takerFee − price × makerFee) / feeScaleK⌉`），导致费池按均价聚合入账时与 maker 逐笔实付的 ceil 之和不一致、产生手续费 dust。
 
-**业务场景与公式**见 [3.4 资金守恒闭环示例](#34-资金守恒闭环示例)。
-
-**公式**：
+已改为在 `RiskEngine` 的 maker 结算里**拆开逐笔**：
 
 ```
-tradeAmountDiff = size × (bidderHoldPrice - price)
-feeDiff (fixed) = size × (takerFee - makerFee)
-feeDiff (变动) = ⌈size × (bidderHoldPrice × takerFee - price × makerFee) / feeScaleK⌉
-return tradeAmountDiff + feeDiff
+reservedTakerFee = calculateTakerFee(size, bidderHoldPrice, spec)   // 释放整块 taker 费预留
+makerFee         = calculateMakerFee(size, matchPrice, spec)        // 逐笔按成交价收
+release          = size × (bidderHoldPrice − matchPrice) + reservedTakerFee − makerFee
 ```
 
-**溢出策略分层**：
-
-- 内层 `bidderHoldPrice × takerFee` 用 multiplyExact 早抛（典型 1e12 × 1e6 = 1e18 安全）
-- 外层 `size × innerNumer` 走 `ceilMulDiv` hybrid
-
-**innerNumer 可负**：fee diff 在 maker rebate（makerFee 负）场景反转方向。`ceilMulDiv` 已支持 `b` 为负——分块算法的 `partial < 0` 处理正确（见 [5.2](#52-代数证明) 中 partial < 0 的证明）。
-
-**调用点**：`OrderBookSpotImpl` 在 trade 完成、买方是 taker 但以 maker 价成交时调用。
+`makerFee` 独立逐笔计（不与 taker 费预留共用 ceil），fees 池按逐笔 maker fee 之和入账 → **手续费逐笔精确、无 dust**。
 
 #### `calculateAmountBidTakerFeeForBudget(long size, long budgetInSteps, CoreSymbolSpecification spec)`
 
@@ -1247,8 +1232,10 @@ Settlement:
   takerFee = calculateTakerFee(size_traded, matchPrice, spec)  ← ceilMulMulDiv
   takerFeeInCurrency = sizePriceToCurrencyScale(takerFee, ...)
   
-  # 退还多冻的部分（taker 价 > maker 价时）
-  release = calculateAmountBidReleaseCorrMaker(size_traded, bidderHoldPrice, matchPrice, spec)
+  # 退还多冻的部分：释放整块 taker 费预留、逐笔改收 maker fee（RiskEngine maker 结算内联）
+  reservedTakerFee = calculateTakerFee(size_traded, bidderHoldPrice, spec)
+  makerFee = calculateMakerFee(size_traded, matchPrice, spec)
+  release = size_traded × (bidderHoldPrice − matchPrice) + reservedTakerFee − makerFee
   releaseInCurrency = sizePriceToCurrencyScale(release, ...)
   account.refund(currency, releaseInCurrency)
 ```
@@ -1521,9 +1508,8 @@ diff = 2 > 0 走缩小
 - 总 fast path: ~20 ns
 
 成交后：
-- `calculateTakerFee` 1 次 → `ceilMulMulDiv` 1 次
+- `calculateTakerFee` 1 次 → `ceilMulMulDiv` 1 次（maker 结算再算 1 次释放 taker 费预留）
 - `calculateMakerFee` 1 次 → 同
-- `calculateAmountBidReleaseCorrMaker` 1 次 → `ceilMulDiv` 1 次
 - 多次 `sizePriceToCurrencyScale`
 - 总 fast path: ~80 ns
 

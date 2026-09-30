@@ -26,9 +26,9 @@ import lombok.extern.slf4j.Slf4j;
  * <h3>三组职责</h3>
  * <ul>
  * <li><b>订单冻结/手续费</b>：
- * {@link #calculateAmountBid} / {@link #calculateAmountBidTakerFee} / {@link #calculateAmountBidReleaseCorrMaker}
+ * {@link #calculateAmountBid} / {@link #calculateAmountBidTakerFee}
  * / {@link #calculateTakerFee} / {@link #calculateMakerFee} / {@link #calculateLiquidationFee}。下单时按 taker 费率冻结上限；
- * 实际以更优 maker 价成交后通过 release 路径退回本金差 + 手续费差。</li>
+ * 实际以更优 maker 价成交后,maker 侧按逐笔 maker 费退回本金差 + 手续费差。</li>
  * <li><b>强平计算</b>：{@link #calculateSizeToLiquidate} 求权益重回维持保证金线所需的最小强平手数；
  * {@link #calculateDeficitAfterLiquidate} 预估强平 x 手后总缺口变化。两者都从公式推导直接以整数表达，不做中间转浮点。</li>
  * <li><b>单位换算</b>：{@link #sizePriceToCurrencyScale} / {@link #currencyToSizePriceScale} /
@@ -107,36 +107,6 @@ public final class CoreArithmeticUtils {
             log.debug("hold amount buy {} = {} * {} * (1 + {})", result, size, price,
                 ceilDivide(spec.takerFee, spec.feeScaleK));
         }
-    }
-
-    /**
-     * 计算订单成交后，返还给Maker的超额冻结资金 <br>
-     * 假设taker费 固定2｜浮动0.1；maker费 固定1｜浮动0.01 <br>
-     * 下单（taker）5块，100手，扣500；手续费 固定 2 * 100 = 200｜浮动 0.1 * 500 = 50 <br>
-     * 最终 4块和别人成单（maker），100手，交易额400；手续费 固定 1 * 100 = 100｜浮动 0.01 * 400 = 4 <br>
-     * 交易部分要退还 (5 - 4) * 100 = 100 <br>
-     * 手续费退还 固定 100 * (2 - 1) = 100 ｜ 浮动 5 * 100 * 0.1 - 4 * 100 * 0.01 = 46 <br>
-     *
-     * @param size 成交手数
-     * @param bidderHoldPrice 下单时的冻结参考价格
-     * @param price 实际成交价格
-     * @param spec 币种配置
-     * @return 应返还的资金（本金差额 + 手续费差额）
-     */
-    public static long calculateAmountBidReleaseCorrMaker(long size, long bidderHoldPrice, long price,
-        CoreSymbolSpecification spec) {
-        long tradeAmountDiff = Math.multiplyExact(size, Math.subtractExact(bidderHoldPrice, price));
-        long feeDiff;
-        if (spec.isFixedFee()) {
-            feeDiff = Math.multiplyExact(size, Math.subtractExact(spec.takerFee, spec.makerFee));
-        } else {
-            // 内层乘法 hold*taker / price*maker 用 multiplyExact 提早抛溢出（typical price≤1e12 × fee≤1e6 = 1e18 安全）
-            // 外层 size×(差) 走 ceilMulDiv（自带 hybrid，溢出 fallback 到 Int128）
-            long innerNumer = Math.subtractExact(Math.multiplyExact(bidderHoldPrice, spec.takerFee),
-                Math.multiplyExact(price, spec.makerFee));
-            feeDiff = ceilMulDiv(size, innerNumer, spec.feeScaleK);
-        }
-        return Math.addExact(tradeAmountDiff, feeDiff);
     }
 
     public static long calculateAmountBidTakerFeeForBudget(long size, long budgetInSteps,
