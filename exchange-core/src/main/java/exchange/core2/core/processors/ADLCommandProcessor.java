@@ -63,6 +63,8 @@ public final class ADLCommandProcessor extends TwoStepCommandProcessor {
                     return false;
                 if (pos.openVolume <= pos.pendingADLSize)
                     return false;
+                if (pos.openInitMarginSum == 0)
+                    return false;
                 if (pos.direction.isSameAsAction(cmd.action))
                     return false;
                 long unrealizedPnl = LiquidationService.unrealizedPnl(pos, bankruptcyPrice);
